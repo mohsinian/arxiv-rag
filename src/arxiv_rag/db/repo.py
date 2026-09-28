@@ -109,6 +109,63 @@ class Repository:
             )
         return [{"month": month_, "count": count} for month_, count in self._session.execute(stmt)]
 
+    def top_categories(self, limit: int = 10) -> list[dict]:
+        """Categories with the most papers (ties broken alphabetically)."""
+        count = func.count(models.paper_categories.c.paper_id).label("count")
+        stmt = (
+            select(models.Category.arxiv_category.label("category"), count)
+            .join(
+                models.paper_categories,
+                models.paper_categories.c.category_id == models.Category.id,
+            )
+            .group_by(models.Category.arxiv_category)
+            .order_by(
+                func.count(models.paper_categories.c.paper_id).desc(),
+                models.Category.arxiv_category,
+            )
+            .limit(limit)
+        )
+        return [dict(row._mapping) for row in self._session.execute(stmt)]
+
+    def top_authors(self, limit: int = 10) -> list[dict]:
+        """Authors with the most papers (ties broken alphabetically)."""
+        count = func.count(models.paper_authors.c.paper_id).label("count")
+        stmt = (
+            select(models.Author.name.label("author"), count)
+            .join(models.paper_authors, models.paper_authors.c.author_id == models.Author.id)
+            .group_by(models.Author.name)
+            .order_by(
+                func.count(models.paper_authors.c.paper_id).desc(),
+                models.Author.name,
+            )
+            .limit(limit)
+        )
+        return [dict(row._mapping) for row in self._session.execute(stmt)]
+
+    def summary(self) -> dict:
+        """Headline counts: papers, authors, categories, avg authors per paper."""
+        papers = self._session.scalar(select(func.count()).select_from(models.Paper)) or 0
+        authors = (
+            self._session.scalar(
+                select(func.count(func.distinct(models.paper_authors.c.author_id)))
+            )
+            or 0
+        )
+        categories = (
+            self._session.scalar(
+                select(func.count(func.distinct(models.paper_categories.c.category_id)))
+            )
+            or 0
+        )
+        links = self._session.scalar(select(func.count()).select_from(models.paper_authors)) or 0
+        avg = round(links / papers, 2) if papers else 0
+        return {
+            "papers": papers,
+            "authors": authors,
+            "categories": categories,
+            "avg_authors_per_paper": avg,
+        }
+
     # -- upsert internals ---------------------------------------------------
 
     def _upsert_one(self, record_: PaperRecord, caches: _LookupCaches) -> str:

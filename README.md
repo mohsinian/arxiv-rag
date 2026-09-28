@@ -7,47 +7,67 @@ pipeline.
 
 ## Status
 
-Project scaffold — see the roadmap below as it fills in.
-
 - [x] Data ingestion (arXiv API, pagination, throttling, safe re-runs)
 - [x] Preprocessing (Atom/XML parsing, normalization)
 - [x] Storage (relational schema + migrations)
+- [x] Docker stack (database + API, no host Python needed)
 - [ ] Visualization API (aggregations for charting)
 - [ ] RAG pipeline (embeddings, retrieval, `/ask` endpoint)
-- [ ] docker-compose, `.env.example`, tests
+- [ ] Retrieval eval (hit@k on hand-written questions)
 
-## Quick start (dev)
+## Run the stack (Docker)
 
-Requires Python ≥3.10 and Docker (with WSL integration enabled if on WSL2).
+Requires only Docker and a `.env`:
 
 ```bash
-cp .env.example .env          # adjust if you like; defaults just work
-make up-db                    # Postgres 16 + pgvector on localhost:5432 (healthy when done)
-make test                     # unit tests — no Docker required
+cp .env.example .env
+docker compose up -d --build
+curl http://localhost:8000/health   # {"status":"ok","db":"ok"}
 ```
 
-The database container auto-enables the `vector` extension on first start
-(`db/init/001_enable_vector.sql`). The API service joins `docker-compose.yml`
-as soon as there is an app to run.
+The `api` service waits for a healthy database, applies Alembic migrations
+on boot, then serves with uvicorn. The database is Postgres 16 with the
+pgvector extension (auto-enabled on first start).
 
-## Ingesting data
+## Ingest & manage data (Docker)
 
-With the database up (`make up-db`) and migrations applied
-(`alembic upgrade head`):
+The API image doubles as the CLI runner — no host Python involved:
 
 ```bash
-.venv/bin/arxiv-rag ingest --categories cs.AI,cs.LG,cs.CL --limit 1000
+docker compose run --rm api arxiv-rag ingest --categories cs.AI,cs.LG,cs.CL --limit 1000
+docker compose run --rm api arxiv-rag wipe                     # full reset
+docker compose run --rm api arxiv-rag wipe --embeddings-only   # drop the RAG index only
 ```
 
 - Requests are throttled to one per 3 seconds (arXiv's etiquette guideline).
 - Re-running is safe: unchanged papers are skipped, changed ones updated —
-  the summary line reports `N new, N updated, N unchanged`.
+  the summary reports `N new, N updated, N unchanged`.
 - A crash mid-ingest keeps every already-fetched page; re-running continues.
-- `python -m arxiv_rag ingest …` works the same way.
 
-## Resetting the dataset
+## Browsing the data
+
+- **Adminer** (web UI): `make ui` → http://localhost:8081
+  (server `db`, user/password/database `arxiv_rag`).
+- **Terminal**: `make db-shell` (pgcli on the host, reads `DATABASE_URL`).
+
+## Development (host)
+
+Requires Python ≥3.10 and Docker (WSL integration enabled on WSL2).
 
 ```bash
-.venv/bin/arxiv-rag wipe                # papers, authors, categories, embeddings
-.venv/bin/arxiv-rag wipe --embeddings-only   # keep papers, drop the RAG index
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"   # or: uv venv + uv pip install
+cp .env.example .env
+make up-db         # database only
+make test          # unit tests, no Docker needed
+make test-integration
+make lint
+```
+
+Code layout: `src/arxiv_rag/` (`ingest/` fetch+parse+clean, `db/` models+repo,
+`api/` FastAPI app, `cli.py`), `migrations/` Alembic, `tests/` unit+integration.
+
+## Resetting everything
+
+```bash
+docker compose down -v   # also removes the database volume
 ```

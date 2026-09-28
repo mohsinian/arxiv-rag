@@ -28,3 +28,14 @@ def test_db_service_has_healthcheck_and_init_script_mount():
 def test_init_sql_enables_vector_extension():
     sql = (REPO_ROOT / "db" / "init" / "001_enable_vector.sql").read_text()
     assert "CREATE EXTENSION IF NOT EXISTS vector" in sql
+
+
+def test_compose_defines_api_service_built_from_repo():
+    api = load_compose()["services"]["api"]
+    assert api["build"]["context"] == "."
+    assert "8000" in str(api["ports"])
+
+
+def test_api_service_waits_for_healthy_db():
+    api = load_compose()["services"]["api"]
+    assert api["depends_on"]["db"]["condition"] == "service_healthy"

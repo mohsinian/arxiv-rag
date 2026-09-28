@@ -1,7 +1,7 @@
 -include .env
 export DATABASE_URL
 
-.PHONY: help up-db down logs psql test test-integration lint format ui db-shell
+.PHONY: help up-db up down logs psql test test-integration lint format ui db-shell smoke
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -9,8 +9,14 @@ help: ## Show available targets
 up-db: ## Start the Postgres + pgvector container (waits until healthy)
 	docker compose up -d --wait db
 
+up: ## Build and start the full stack (db + api)
+	docker compose up -d --build
+
 down: ## Stop the stack (data volume is kept)
 	docker compose down
+
+smoke: ## Verify the composed API is serving
+	curl -fsS http://localhost:$${API_PORT:-8000}/health && echo
 
 logs: ## Tail database logs
 	docker compose logs -f db

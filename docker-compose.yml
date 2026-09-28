@@ -17,6 +17,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # The API container doubles as the CLI runner:
+  #   docker compose run --rm api arxiv-rag ingest --limit 1000
+  api:
+    build:
+      context: .
+    container_name: arxiv-rag-api
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-arxiv_rag}:${POSTGRES_PASSWORD:-arxiv_rag}@db:5432/${POSTGRES_DB:-arxiv_rag}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: sh -c "alembic upgrade head && uvicorn arxiv_rag.api.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
   # Lightweight web DB UI — opt-in: `make ui` → http://localhost:8081
   # (log in with server=db, user/password/database from .env)
   adminer:

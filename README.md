@@ -16,6 +16,16 @@ Project scaffold — see the roadmap below as it fills in.
 - [ ] RAG pipeline (embeddings, retrieval, `/ask` endpoint)
 - [ ] docker-compose, `.env.example`, tests
 
-## Quick start
+## Quick start (dev)
 
-Setup instructions will land here once the stack exists.
+Requires Python ≥3.10 and Docker (with WSL integration enabled if on WSL2).
+
+```bash
+cp .env.example .env          # adjust if you like; defaults just work
+make up-db                    # Postgres 16 + pgvector on localhost:5432 (healthy when done)
+make test                     # unit tests — no Docker required
+```
+
+The database container auto-enables the `vector` extension on first start
+(`db/init/001_enable_vector.sql`). The API service joins `docker-compose.yml`
+as soon as there is an app to run.

@@ -24,3 +24,26 @@ SETTINGS_ENV_VARS = (
 def isolate_settings_env(monkeypatch):
     for var in SETTINGS_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture
+def sqlite_session():
+    """Fresh in-memory database with all tables created; no cleanup needed."""
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import Session
+
+    from arxiv_rag.db.models import Base
+
+    engine = create_engine("sqlite://")
+
+    @event.listens_for(engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    yield session
+    session.close()
+    engine.dispose()

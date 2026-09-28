@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -62,3 +63,12 @@ def test_input_record_is_not_mutated():
     clean_record(original)
     assert original.title == "  A   Title\nwith\twhitespace  "
     assert original.authors == ("  Alice   Researcher ", "", "Bob\nEngineer")
+
+
+def test_duplicate_author_names_within_a_record_are_deduped():
+    # real arXiv data: consortium papers can list the same author twice
+    record = replace(
+        dirty_record(), authors=("Alice Researcher", "Bob Engineer", "Alice Researcher")
+    )
+    r = clean_record(record)
+    assert r.authors == ("Alice Researcher", "Bob Engineer")

@@ -139,7 +139,9 @@ class Repository:
     def _write_join_rows(
         self, paper: models.Paper, record_: PaperRecord, caches: _LookupCaches
     ) -> None:
-        for position, name in enumerate(record_.authors):
+        # dict.fromkeys: the same author listed twice in one feed entry must not
+        # violate the (paper_id, author_id) primary key
+        for position, name in enumerate(dict.fromkeys(record_.authors)):
             author = self._get_or_create_author(name, caches)
             self._session.execute(
                 models.paper_authors.insert().values(

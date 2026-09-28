@@ -10,18 +10,20 @@ def clean_record(record: PaperRecord) -> PaperRecord:
     """Return a normalized copy of `record`; the input is left untouched.
 
     - title/abstract: collapse all whitespace runs (newlines included) to one space
-    - author names: unicode-normalized (NFKC), whitespace collapsed, empties dropped
-      — this is also the form the DB stores, so name dedup stays consistent
+    - author names: unicode-normalized (NFKC), whitespace collapsed, empties dropped,
+      duplicates deduped keeping first occurrence (real feeds list some authors
+      twice) — this is also the form the DB stores, so name dedup stays consistent
     - dates: converted to UTC; naive datetimes are assumed UTC
     - doi/journal_ref: stripped; blank values become None
     """
     published = _to_utc(record.published)
     updated = _to_utc(record.updated)
+    cleaned_names = (name for name in (_clean_name(n) for n in record.authors) if name)
     return PaperRecord(
         arxiv_id=record.arxiv_id.strip(),
         title=_collapse_ws(record.title),
         abstract=_collapse_ws(record.abstract),
-        authors=tuple(a for a in (_clean_name(n) for n in record.authors) if a),
+        authors=tuple(dict.fromkeys(cleaned_names)),
         categories=tuple(dict.fromkeys(c.strip() for c in record.categories)),
         primary_category=record.primary_category.strip(),
         published=published,

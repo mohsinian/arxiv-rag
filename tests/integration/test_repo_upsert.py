@@ -164,3 +164,16 @@ def test_failing_record_rolls_back_the_whole_batch(pg_session):
         repo.upsert_records([record(), record(arxiv_id="2401.00002", categories=(too_long,))])
 
     assert count(pg_session, models.Paper) == 0  # the earlier record was not half-committed
+
+
+def test_duplicate_authors_within_one_record_do_not_crash(pg_session):
+    # regression: a real arXiv paper listed the same author twice, which
+    # violated the paper_authors primary key
+    repo = Repository(pg_session)
+    summary = repo.upsert_records(
+        [record(authors=("Alice Researcher", "Bob Engineer", "Alice Researcher"))]
+    )
+
+    assert summary.new == 1
+    paper = paper_by_arxiv_id(pg_session, "2401.00001")
+    assert author_names_in_order(pg_session, paper.id) == ["Alice Researcher", "Bob Engineer"]

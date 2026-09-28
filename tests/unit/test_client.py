@@ -82,3 +82,101 @@ def test_empty_categories_are_rejected():
     client = make_client(lambda request: httpx.Response(200, text=load_atom("two_entries.xml")))
     with pytest.raises(ValueError, match="categor"):
         client.fetch_page([])
+
+
+# ---------------------------------------------------------------------------
+# Pagination (iter_papers)
+
+ENTRY_TPL = """
+<entry>
+  <id>http://arxiv.org/abs/{arxiv_id}v1</id>
+  <updated>2024-02-01T00:00:00Z</updated>
+  <published>2024-02-01T00:00:00Z</published>
+  <title>Paper {n}</title>
+  <summary>Abstract number {n}.</summary>
+  <author><name>Author {n}</name></author>
+  <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+</entry>
+"""
+
+
+def make_feed(*arxiv_ids: str) -> str:
+    entries = "".join(ENTRY_TPL.format(arxiv_id=i, n=idx + 1) for idx, i in enumerate(arxiv_ids))
+    return f'<feed xmlns="http://www.w3.org/2005/Atom">{entries}</feed>'
+
+
+def queue_handler(pages: list[str], captured: list[httpx.Request]):
+    pages = list(pages)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, text=pages.pop(0))
+
+    return handler
+
+
+def test_iter_papers_yields_records_across_pages():
+    captured: list[httpx.Request] = []
+    client = make_client(
+        queue_handler(
+            [
+                make_feed("2401.00001", "2401.00002"),
+                make_feed("2401.00003", "2401.00004"),
+                make_feed("2401.00005", "2401.00006"),
+            ],
+            captured,
+        ),
+        arxiv_page_size=2,
+    )
+    records = list(client.iter_papers(["cs.LG"], limit=6))
+    assert [r.arxiv_id for r in records] == [
+        "2401.00001",
+        "2401.00002",
+        "2401.00003",
+        "2401.00004",
+        "2401.00005",
+        "2401.00006",
+    ]
+    starts = [request.url.params["start"] for request in captured]
+    assert starts == ["0", "2", "4"]
+
+
+def test_iter_papers_stops_when_a_page_comes_back_short():
+    captured: list[httpx.Request] = []
+    client = make_client(
+        queue_handler([make_feed("2401.00001", "2401.00002"), make_feed("2401.00003")], captured),
+        arxiv_page_size=2,
+    )
+    records = list(client.iter_papers(["cs.LG"], limit=100))
+    assert [r.arxiv_id for r in records] == ["2401.00001", "2401.00002", "2401.00003"]
+    assert len(captured) == 2  # a short page means the server is exhausted
+
+
+def test_iter_papers_respects_limit_without_overfetching():
+    captured: list[httpx.Request] = []
+    client = make_client(
+        queue_handler([make_feed("2401.00001", "2401.00002"), make_feed("2401.00003")], captured),
+        arxiv_page_size=2,
+    )
+    records = list(client.iter_papers(["cs.LG"], limit=3))
+    assert len(records) == 3
+    assert captured[0].url.params["max_results"] == "2"
+    assert captured[1].url.params["max_results"] == "1"  # last page shrunk to the remainder
+
+
+def test_iter_papers_stops_on_empty_page():
+    empty_feed = "<feed xmlns='http://www.w3.org/2005/Atom'/>"
+    captured: list[httpx.Request] = []
+    client = make_client(
+        queue_handler([make_feed("2401.00001", "2401.00002"), empty_feed], captured),
+        arxiv_page_size=2,
+    )
+    records = list(client.iter_papers(["cs.LG"], limit=100))
+    assert [r.arxiv_id for r in records] == ["2401.00001", "2401.00002"]
+    assert len(captured) == 2  # an empty page after a full one ends iteration
+
+
+def test_iter_papers_rejects_non_positive_limit():
+    client = make_client(lambda request: httpx.Response(200, text=make_feed()))
+    with pytest.raises(ValueError, match="limit"):
+        list(client.iter_papers(["cs.LG"], limit=0))

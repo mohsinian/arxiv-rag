@@ -1,6 +1,7 @@
 """HTTP client for the arXiv API (https://export.arxiv.org/api/query)."""
 
 import logging
+from collections.abc import Iterator
 
 import httpx
 
@@ -76,6 +77,26 @@ class ArxivClient:
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }
+
+    def iter_papers(self, categories: list[str], limit: int) -> Iterator[PaperRecord]:
+        """Yield up to `limit` papers, transparently paginating through the API.
+
+        Stops early when a page comes back shorter than requested or empty —
+        both mean the result set is exhausted.
+        """
+        if limit <= 0:
+            raise ValueError(f"limit must be positive, got {limit}")
+
+        fetched = 0
+        while fetched < limit:
+            page_size = min(self._settings.arxiv_page_size, limit - fetched)
+            records = self.fetch_page(categories, start=fetched, max_results=page_size)
+            if not records:
+                return
+            yield from records
+            fetched += len(records)
+            if len(records) < page_size:
+                return
 
     def close(self) -> None:
         self._http.close()

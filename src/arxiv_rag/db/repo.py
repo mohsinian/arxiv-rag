@@ -1,11 +1,11 @@
 """Persistence operations: idempotent upserts, wipes, and aggregations."""
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import String, delete, func, select
+from sqlalchemy import String, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from arxiv_rag.db import models
@@ -165,6 +165,46 @@ class Repository:
             "categories": categories,
             "avg_authors_per_paper": avg,
         }
+
+    # -- embeddings -----------------------------------------------------------
+
+    def papers_needing_embedding(self) -> Iterator[tuple[int, str, str]]:
+        """Papers with no embedding row, or whose text changed after embedding."""
+        rows = self._session.execute(
+            select(models.Paper.id, models.Paper.title, models.Paper.abstract)
+            .join(
+                models.PaperEmbedding,
+                models.PaperEmbedding.paper_id == models.Paper.id,
+                isouter=True,
+            )
+            .where(
+                or_(
+                    models.PaperEmbedding.paper_id.is_(None),
+                    models.Paper.updated_at > models.PaperEmbedding.embedded_at,
+                )
+            )
+        ).all()
+        return iter(rows)
+
+    def store_embeddings(self, rows: Sequence[tuple[int, list[float], str]]) -> None:
+        """Replace embedding rows in one transaction: (paper_id, vector, model)."""
+        try:
+            for paper_id, vector, model in rows:
+                self._session.execute(
+                    delete(models.PaperEmbedding).where(models.PaperEmbedding.paper_id == paper_id)
+                )
+                self._session.add(
+                    models.PaperEmbedding(paper_id=paper_id, embedding=vector, model=model)
+                )
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            logger.exception("embedding batch of %d rows rolled back", len(rows))
+            raise
+
+    def execute_similar_papers(self, stmt, query_vector: Sequence[float]):
+        """Run a similarity query with the query vector bound as a parameter."""
+        return self._session.execute(stmt, {"query_vector": query_vector}).all()
 
     # -- upsert internals ---------------------------------------------------
 

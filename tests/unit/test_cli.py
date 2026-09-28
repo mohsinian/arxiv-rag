@@ -105,3 +105,54 @@ def test_wipe_embeddings_only(fakes):
 
     assert result.exit_code == 0, result.output
     assert FakeRepo.last.wipe_calls == [{"embeddings_only": True}]
+
+
+class FakeIndexer:
+    last: "FakeIndexer | None" = None
+
+    def __init__(self, repo, embedder, expected_dim):
+        self.repo = repo
+        self.embedder = embedder
+        self.expected_dim = expected_dim
+        self.calls: list[dict] = []
+        FakeIndexer.last = self
+
+    def reindex(self, rebuild=False):
+        from arxiv_rag.rag.indexer import ReindexSummary
+
+        self.calls.append({"rebuild": rebuild})
+        return ReindexSummary(embedded=7)
+
+
+@pytest.fixture
+def reindex_fakes(monkeypatch, fakes):
+    monkeypatch.setattr(cli, "EmbeddingIndexer", FakeIndexer)
+    monkeypatch.setattr(cli, "build_embedder", lambda settings: object())
+
+
+def test_reindex_builds_indexer_with_settings_dim(reindex_fakes):
+    result = runner.invoke(cli.app, ["reindex"])
+
+    assert result.exit_code == 0, result.output
+    assert FakeIndexer.last.expected_dim == 768
+    assert FakeIndexer.last.calls == [{"rebuild": False}]
+    assert "7 embedded" in result.output
+
+
+def test_reindex_rebuild_flag(reindex_fakes):
+    result = runner.invoke(cli.app, ["reindex", "--rebuild"])
+
+    assert result.exit_code == 0, result.output
+    assert FakeIndexer.last.calls == [{"rebuild": True}]
+
+
+def test_reindex_failure_exits_nonzero(monkeypatch, reindex_fakes):
+    class ExplodingIndexer(FakeIndexer):
+        def reindex(self, rebuild=False):
+            raise RuntimeError("model missing")
+
+    monkeypatch.setattr(cli, "EmbeddingIndexer", ExplodingIndexer)
+    result = runner.invoke(cli.app, ["reindex"])
+
+    assert result.exit_code == 1
+    assert "model missing" in result.output

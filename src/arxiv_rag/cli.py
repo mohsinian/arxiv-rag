@@ -1,4 +1,4 @@
-"""Command-line interface: ingest and wipe (reindex/eval arrive with the RAG phases)."""
+"""Command-line interface: ingest, wipe, reindex (eval arrives with Phase 7)."""
 
 import logging
 
@@ -10,6 +10,8 @@ from arxiv_rag.config import get_settings
 from arxiv_rag.db.repo import Repository
 from arxiv_rag.ingest.client import ArxivClient
 from arxiv_rag.ingest.pipeline import IngestPipeline
+from arxiv_rag.rag.embeddings import build_embedder
+from arxiv_rag.rag.indexer import EmbeddingIndexer
 
 app = typer.Typer(help="Ingest arXiv papers into Postgres and manage the dataset.")
 
@@ -71,6 +73,28 @@ def wipe(
         else "Dataset wiped (papers, authors, categories, embeddings)"
     )
     typer.echo(what)
+
+
+@app.command()
+def reindex(
+    rebuild: bool = typer.Option(
+        False, "--rebuild", help="Drop all embeddings first, then re-embed everything."
+    ),
+) -> None:
+    """Generate embeddings for papers that are new or changed since indexing."""
+    settings = get_settings()
+    session = _open_session()
+    try:
+        indexer = EmbeddingIndexer(
+            Repository(session), build_embedder(settings), expected_dim=settings.embed_dim
+        )
+        summary = indexer.reindex(rebuild=rebuild)
+    except Exception as exc:
+        typer.echo(f"reindex failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        session.close()
+    typer.echo(f"Reindex complete: {summary}")
 
 
 def main() -> None:

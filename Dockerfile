@@ -1,15 +1,29 @@
+# --- build stage: install all dependencies, CPU-only torch ---
+FROM python:3.12-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu \
+    PIP_PREFER_BINARY=1
+
+WORKDIR /build
+# torch first from the CPU index so the app install sees it satisfied
+RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install .
+
+# --- runtime stage: same interpreter, no build tooling, non-root ---
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    HF_HOME=/home/appuser/.cache/huggingface
 
 WORKDIR /app
 
-# Install the package first so dependency layers cache independently of code
-COPY pyproject.toml README.md ./
-COPY src ./src
-RUN pip install --no-cache-dir .
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Migrations + CLI wiring (alembic runs on boot, arxiv-rag for one-off jobs)
 COPY alembic.ini ./

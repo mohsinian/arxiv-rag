@@ -22,6 +22,13 @@ class IngestSummary:
     def __str__(self) -> str:
         return f"{self.new} new, {self.updated} updated, {self.unchanged} unchanged"
 
+    def __add__(self, other: "IngestSummary") -> "IngestSummary":
+        return IngestSummary(
+            new=self.new + other.new,
+            updated=self.updated + other.updated,
+            unchanged=self.unchanged + other.unchanged,
+        )
+
 
 @dataclass
 class _LookupCaches:

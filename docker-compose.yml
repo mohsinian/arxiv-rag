@@ -26,6 +26,17 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-arxiv_rag}:${POSTGRES_PASSWORD:-arxiv_rag}@db:5432/${POSTGRES_DB:-arxiv_rag}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Alibaba-NLP/gte-modernbert-base}
+      EMBED_DIM: ${EMBED_DIM:-768}
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-32}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      MIN_SCORE: ${MIN_SCORE:-0.25}
+      MAX_CONTEXT_CHARS: ${MAX_CONTEXT_CHARS:-12000}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+    volumes:
+      - hf-cache:/home/appuser/.cache/huggingface
     command: sh -c "alembic upgrade head && uvicorn arxiv_rag.api.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "${API_PORT:-8000}:8000"
@@ -49,3 +60,4 @@ services:
 
 volumes:
   pgdata:
+  hf-cache:

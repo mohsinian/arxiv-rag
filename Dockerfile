@@ -15,7 +15,9 @@ RUN pip install --no-cache-dir .
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN useradd --create-home appuser && chown -R appuser:appuser /app
+RUN useradd --create-home appuser \
+    && mkdir -p /home/appuser/.cache/huggingface \
+    && chown -R appuser:appuser /app /home/appuser/.cache
 USER appuser
 
 EXPOSE 8000

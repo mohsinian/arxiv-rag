@@ -84,3 +84,14 @@ def test_llm_failure_raises_instead_of_fabricating():
 
 def test_chat_client_protocol_is_satisfied_by_minimal_fake():
     assert isinstance(FakeLLM("x"), ChatClient)
+
+
+def test_chat_client_boots_without_an_api_key_and_only_fails_on_use():
+    # the API must start (health/stats) with no LLM key; only /ask may fail
+    from arxiv_rag.rag.llm import OpenAICompatibleChat
+
+    client = OpenAICompatibleChat(
+        base_url="https://api.openai.com/v1", api_key="", model="gpt-4o-mini"
+    )
+    with pytest.raises(Exception, match="api_key"):
+        client.complete("system", "user")

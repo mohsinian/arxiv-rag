@@ -1,0 +1,15 @@
+# Hand-written retrieval eval questions with the arxiv_ids that should be
+# retrieved. A sanity harness for retrieval quality and model comparison —
+# not a benchmark. Expanded to the full 15-20 question set after the
+# full-dataset ingest (see plan Step 27).
+questions:
+  - question: How do agents handle the stability-plasticity tradeoff in memory?
+    expected: ["2609.30558"]
+  - question: What is the CARGO evaluation framework for agentic AI?
+    expected: ["2609.30471"]
+  - question: Does uniform discrete diffusion need time scheduling?
+    expected: ["2609.30977"]
+  - question: How can models estimate and orthogonalize unknown pre-training gradients?
+    expected: ["2609.30935"]
+  - question: What is a deliberately unanswerable question about underwater basket weaving?
+    expected: ["none"]

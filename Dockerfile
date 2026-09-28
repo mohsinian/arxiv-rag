@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir .
 # Migrations + CLI wiring (alembic runs on boot, arxiv-rag for one-off jobs)
 COPY alembic.ini ./
 COPY migrations ./migrations
+COPY eval ./eval
 
 RUN useradd --create-home appuser \
     && mkdir -p /home/appuser/.cache/huggingface \

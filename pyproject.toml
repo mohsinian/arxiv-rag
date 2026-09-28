@@ -19,6 +19,7 @@ dev = [
     "ruff>=0.6",
     "pyyaml>=6",
     "types-PyYAML>=6",
+    "pgcli>=4",
 ]
 
 [build-system]

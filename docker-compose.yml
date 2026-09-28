@@ -17,5 +17,19 @@ services:
       timeout: 3s
       retries: 10
 
+  # Lightweight web DB UI — opt-in: `make ui` → http://localhost:8081
+  # (log in with server=db, user/password/database from .env)
+  adminer:
+    image: adminer:4
+    profiles: ["ui"]
+    container_name: arxiv-rag-adminer
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:

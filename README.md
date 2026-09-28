@@ -5,69 +5,196 @@ aggregated data through a visualization API, and answer natural-language
 questions about the dataset with a Retrieval-Augmented Generation (RAG)
 pipeline.
 
-## Status
-
-- [x] Data ingestion (arXiv API, pagination, throttling, safe re-runs)
-- [x] Preprocessing (Atom/XML parsing, normalization)
-- [x] Storage (relational schema + migrations)
-- [x] Docker stack (database + API, no host Python needed)
-- [ ] Visualization API (aggregations for charting)
-- [ ] RAG pipeline (embeddings, retrieval, `/ask` endpoint)
-- [ ] Retrieval eval (hit@k on hand-written questions)
-
-## Run the stack (Docker)
-
-Requires only Docker and a `.env`:
-
-```bash
-cp .env.example .env
-docker compose up -d --build
-curl http://localhost:8000/health   # {"status":"ok","db":"ok"}
+```
+arXiv API ──► ingest (parse → clean → upsert) ──► PostgreSQL + pgvector
+                                                    │            │
+                                       stats API (SQL aggregations) │
+                                                    │   embeddings (gte-modernbert-base, local)
+                                                    ▼            ▼
+                                          GET /api/v1/…   POST /api/v1/ask
+                                                          retrieve top-k → LLM answer + sources
 ```
 
-The `api` service waits for a healthy database, applies Alembic migrations
-on boot, then serves with uvicorn. The database is Postgres 16 with the
-pgvector extension (auto-enabled on first start).
+## Quick start (Docker, ~5 minutes)
 
-## Ingest & manage data (Docker)
+Requires only Docker and a `.env`. No host Python.
 
-The API image doubles as the CLI runner — no host Python involved:
+```bash
+cp .env.example .env            # then set LLM_API_KEY (any OpenAI-compatible provider)
+docker compose up -d --build    # db (Postgres 16 + pgvector) + api (migrates on boot)
+curl http://localhost:8000/health
+# {"status":"ok","db":"ok"}
+```
+
+Then ingest, index, and ask:
 
 ```bash
 docker compose run --rm api arxiv-rag ingest --categories cs.AI,cs.LG,cs.CL --limit 1000
-docker compose run --rm api arxiv-rag wipe                     # full reset
-docker compose run --rm api arxiv-rag wipe --embeddings-only   # drop the RAG index only
+docker compose run --rm api arxiv-rag reindex
+curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
+     -d '{"question":"What is CARGO?"}'
 ```
 
-- Requests are throttled to one per 3 seconds (arXiv's etiquette guideline).
-- Re-running is safe: unchanged papers are skipped, changed ones updated —
-  the summary reports `N new, N updated, N unchanged`.
-- A crash mid-ingest keeps every already-fetched page; re-running continues.
+Notes:
+- arXiv requests are throttled to one per 3 seconds; ingesting 1,000 papers takes ~6 minutes.
+- Re-running ingest is idempotent (`N new, N updated, N unchanged`); reindex only embeds
+  new/changed papers.
+- The first `reindex` downloads the embedding model (~600 MB) into the `hf-cache` volume.
+- The API image doubles as the CLI runner — everything happens inside Docker.
 
-## Browsing the data
+## API
 
-- **Adminer** (web UI): `make ui` → http://localhost:8081
-  (server `db`, user/password/database `arxiv_rag`).
-- **Terminal**: `make db-shell` (pgcli on the host, reads `DATABASE_URL`).
+All endpoints are served by the `api` container (`API_PORT`, default 8000).
+Interactive docs: `http://localhost:8000/docs`.
+
+### `GET /health`
+
+```bash
+curl http://localhost:8000/health
+```
+
+```json
+{"status": "ok", "db": "ok"}
+```
+
+### `GET /api/v1/stats/papers-by-month?category=cs.AI&months=12`
+
+Paper counts per publication month (computed in the database). `category` and `months` are optional.
+
+```json
+[{"month": "2026-09", "count": 100}]
+```
+
+### `GET /api/v1/stats/top-categories?limit=5`
+
+```json
+[
+  {"category": "cs.AI", "count": 100},
+  {"category": "cs.CL", "count": 100},
+  {"category": "cs.LG", "count": 100},
+  {"category": "cs.CV", "count": 7},
+  {"category": "cs.IR", "count": 4}
+]
+```
+
+### `GET /api/v1/stats/top-authors?limit=3`
+
+```json
+[
+  {"author": "Binfeng Xu", "count": 2},
+  {"author": "David Ababio Awuni", "count": 2},
+  {"author": "Elvis Gyasi Owusu", "count": 2}
+]
+```
+
+### `GET /api/v1/stats/summary`
+
+```json
+{"papers": 100, "authors": 488, "categories": 18, "avg_authors_per_paper": 5.03}
+```
+
+### `POST /api/v1/ask`
+
+```bash
+curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
+     -d '{"question":"How do AI agents use memory to stay stable while learning new tasks?"}'
+```
+
+```json
+{
+  "answer": "The passages don't directly answer this question. The closest is [1], which studies the stability-plasticity tradeoff in agent memory: ...",
+  "matched": true,
+  "sources": [
+    {"arxiv_id": "2609.30558", "title": "Probing Stability-Plasticity Tradeoffs in Agent Memory through Cognitive Experimental Paradigms", "score": 0.7677},
+    {"arxiv_id": "2609.29233", "title": "Post-Training Leaves Behavioral Shadows on Unrelated Decisions", "score": 0.6564}
+  ]
+}
+```
+
+When nothing relevant is indexed, the LLM is never called: `matched` is `false`,
+`sources` is empty, and `answer` says so. Blank/oversized questions return 422;
+LLM provider failures return 502 — never a fabricated answer.
+
+## Schema
+
+```
+papers(id, arxiv_id UNIQUE, title, abstract, published_at, updated_at,
+       doi NULL, journal_ref NULL, primary_category_id → categories)
+authors(id, name UNIQUE)
+categories(id, arxiv_category UNIQUE)
+paper_authors(paper_id, author_id, position)     -- author order preserved
+paper_categories(paper_id, category_id)          -- cross-listings
+paper_embeddings(paper_id, VECTOR(768), model, embedded_at)   -- RAG index, separable
+```
+
+- One paper ↔ many authors/categories via join tables; the primary category is a FK.
+- Embeddings live in their own table so the RAG index can be rebuilt or wiped
+  (`wipe --embeddings-only`) without touching papers.
+- Schema is reproducible from scratch: `alembic upgrade head` (the migration
+  also enables the `vector` extension).
+
+## Retrieval quality (hit@k)
+
+`eval/retrieval_questions.yaml` holds hand-written questions with the
+arxiv_ids a good system should retrieve. The `eval` command runs retrieval
+only (no LLM) and reports hit@1/3/5:
+
+```bash
+docker compose run --rm api arxiv-rag eval
+# Evaluated 5 questions (retrieving top 10):
+#   hit@1: 80.0%   hit@3: 80.0%   hit@5: 80.0%
+```
+
+It is a sanity harness for regressions and embedding-model comparison —
+not a benchmark claim (the set is small by design).
+
+## Environment variables
+
+See [.env.example](.env.example) for the full list with comments. Highlights:
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | SQLAlchemy URL (compose sets it inside the network) |
+| `ARXIV_SLEEP_SECONDS` | Throttle (arXiv etiquette: ≥3s) |
+| `EMBEDDING_MODEL` / `EMBED_DIM` | Local embedding model and its dimension |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | Any OpenAI-compatible chat endpoint (OpenAI, xkiro, OpenRouter, …) |
+| `RAG_TOP_K` / `MIN_SCORE` | Retrieval breadth and the similarity floor for a "match" |
+| `POSTGRES_PORT` / `API_PORT` | Host ports (bump if 5432/8000 clash) |
 
 ## Development (host)
 
-Requires Python ≥3.10 and Docker (WSL integration enabled on WSL2).
-
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"   # or: uv venv + uv pip install
-cp .env.example .env
-make up-db         # database only
-make test          # unit tests, no Docker needed
-make test-integration
-make lint
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+cp .env.example .env && make up-db    # database only
+make test                             # unit tests (no Docker needed)
+make test-integration                 # needs `make up-db`
+make lint                             # ruff lint + format check
+make ui                               # Adminer web DB UI on :8081
+make db-shell                         # pgcli terminal shell
 ```
 
-Code layout: `src/arxiv_rag/` (`ingest/` fetch+parse+clean, `db/` models+repo,
-`api/` FastAPI app, `cli.py`), `migrations/` Alembic, `tests/` unit+integration.
+Code layout: `src/arxiv_rag/` — `ingest/` (client, parser, preprocessing,
+pipeline), `db/` (models, repo), `rag/` (embeddings, indexer, retrieve,
+answer, evaluation), `api/` (FastAPI app), `cli.py`; `migrations/` Alembic;
+`tests/` unit + integration; `eval/` retrieval question set.
 
-## Resetting everything
+## Known limitations & next steps
 
-```bash
-docker compose down -v   # also removes the database volume
-```
+1. **Reranking with a cross-encoder** (e.g. bge-reranker) over the top-50
+   candidates — the single biggest quality win available before touching anything else.
+2. **Query rewriting** before retrieval (expand/clarify the question with the LLM
+   before embedding it).
+3. **Chunking full PDFs** — only title+abstract is embedded; full-text chunking
+   with per-chunk vectors and paper-level aggregation would cover papers whose
+   abstracts don't carry the answer.
+4. **Auth and rate limiting on `/ask`** — API keys + per-key quotas before any
+   public exposure; `/ask` is unauthenticated.
+5. **Caching** — embedding cache keyed on text hash; short-TTL answer cache for
+   repeated questions; HTTP caching for stats endpoints.
+6. **Author-name dedup** is exact-match; two different researchers sharing a name
+   collapse into one row (no ORCID in the arXiv API).
+7. **No ANN index** (HNSW) on the embedding column — exact scan is fine at ≤5k
+   vectors; needed at scale.
+8. The eval set is intentionally small (sanity harness, not a benchmark);
+   MIN_SCORE was eyeballed on a handful of unanswerable questions, not tuned
+   systematically.

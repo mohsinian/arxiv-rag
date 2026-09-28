@@ -177,3 +177,14 @@ def test_duplicate_authors_within_one_record_do_not_crash(pg_session):
     assert summary.new == 1
     paper = paper_by_arxiv_id(pg_session, "2401.00001")
     assert author_names_in_order(pg_session, paper.id) == ["Alice Researcher", "Bob Engineer"]
+
+
+def test_category_order_in_the_feed_does_not_trigger_an_update(pg_session):
+    # regression: stored rows come back in index order, not feed order, which
+    # made every multi-category paper look "changed" on every re-ingest
+    repo = Repository(pg_session)
+    repo.upsert_records([record(categories=("cs.LG", "cs.AI", "cs.CL"))])
+
+    summary = repo.upsert_records([record(categories=("cs.CL", "cs.AI", "cs.LG"))])
+
+    assert summary == IngestSummary(new=0, updated=0, unchanged=1)

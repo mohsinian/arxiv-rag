@@ -170,7 +170,7 @@ class Repository:
                 .order_by(models.paper_authors.c.position)
             ).scalars()
         )
-        stored_categories = list(
+        stored_categories = set(
             self._session.execute(
                 select(models.Category.arxiv_category)
                 .join(
@@ -189,7 +189,7 @@ class Repository:
             and paper.published_at == record_.published
             and paper.updated_at == record_.updated
             and stored_authors == list(record_.authors)
-            and stored_categories == list(record_.categories)
+            and stored_categories == set(record_.categories)
             and stored_primary is not None
             and stored_primary.arxiv_category == record_.primary_category
         )

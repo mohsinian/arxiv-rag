@@ -1,10 +1,11 @@
-"""Persistence operations: idempotent upserts and dataset wipes."""
+"""Persistence operations: idempotent upserts, wipes, and aggregations."""
 
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import String, delete, func, select
 from sqlalchemy.orm import Session
 
 from arxiv_rag.db import models
@@ -79,6 +80,34 @@ class Repository:
             self._session.execute(delete(models.Category))
         self._session.commit()
         logger.info("wipe complete (embeddings_only=%s)", embeddings_only)
+
+    # -- aggregations (served by the stats API; always computed in SQL) ------
+
+    def papers_by_month(self, category: str | None = None, months: int | None = None) -> list[dict]:
+        """Paper counts grouped by publication month (YYYY-MM), ascending.
+
+        `months` keeps only papers published within roughly the last N months
+        (30-day approximation). `category` filters to papers carrying that
+        arXiv category (primary or cross-listed).
+        """
+        month = func.substr(func.cast(models.Paper.published_at, String), 1, 7).label("month")
+        stmt = select(month, func.count().label("count")).group_by(month).order_by(month)
+        if months is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30 * months)
+            stmt = stmt.where(models.Paper.published_at >= cutoff)
+        if category is not None:
+            stmt = (
+                stmt.join(
+                    models.paper_categories,
+                    models.paper_categories.c.paper_id == models.Paper.id,
+                )
+                .join(
+                    models.Category,
+                    models.Category.id == models.paper_categories.c.category_id,
+                )
+                .where(models.Category.arxiv_category == category)
+            )
+        return [{"month": month_, "count": count} for month_, count in self._session.execute(stmt)]
 
     # -- upsert internals ---------------------------------------------------
 

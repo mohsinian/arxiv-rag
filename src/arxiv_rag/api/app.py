@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 import arxiv_rag
 from arxiv_rag.api.routes.health import router as health_router
+from arxiv_rag.api.routes.stats import router as stats_router
 
 SessionFactory = Callable[[], Session]
 
@@ -25,4 +26,5 @@ def create_app(session_factory: SessionFactory | None = None) -> FastAPI:
     )
     app.state.session_factory = session_factory
     app.include_router(health_router)
+    app.include_router(stats_router)
     return app

@@ -156,3 +156,47 @@ def test_reindex_failure_exits_nonzero(monkeypatch, reindex_fakes):
 
     assert result.exit_code == 1
     assert "model missing" in result.output
+
+
+@pytest.fixture
+def eval_fakes(monkeypatch, reindex_fakes):
+    from arxiv_rag.rag.evaluation import EvalQuestion, EvalReport, QuestionResult
+
+    questions = [
+        EvalQuestion(question="q1", expected=["a"]),
+        EvalQuestion(question="q2", expected=["b"]),
+    ]
+    monkeypatch.setattr(cli, "load_questions", lambda path: questions)
+
+    def fake_run_eval(questions, retrieve, ks=(1, 3, 5)):
+        retrieved = {"q1": ["a", "x"], "q2": ["x", "y"]}
+        results = [QuestionResult(question=q, retrieved=retrieved[q.question]) for q in questions]
+        return EvalReport(results=results, ks=ks)
+
+    monkeypatch.setattr(cli, "run_eval", fake_run_eval)
+    return questions
+
+
+def test_eval_prints_hit_rates(eval_fakes):
+    result = runner.invoke(cli.app, ["eval"])
+
+    assert result.exit_code == 0, result.output
+    assert "hit@1" in result.output
+    assert "50.0%" in result.output  # 1 of 2 questions hit at k=1
+
+
+def test_eval_lists_misses(eval_fakes):
+    result = runner.invoke(cli.app, ["eval"])
+
+    assert result.exit_code == 0
+    assert "q2" in result.output  # the miss is shown with its expected ids
+
+
+def test_eval_with_missing_file_exits_nonzero(monkeypatch, eval_fakes):
+    monkeypatch.setattr(
+        cli, "load_questions", lambda path: (_ for _ in ()).throw(FileNotFoundError("nope"))
+    )
+    result = runner.invoke(cli.app, ["eval", "/nope/path.yaml"])
+
+    assert result.exit_code == 1
+    assert "nope" in result.output

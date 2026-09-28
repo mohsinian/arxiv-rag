@@ -1,6 +1,7 @@
-"""Command-line interface: ingest, wipe, reindex (eval arrives with Phase 7)."""
+"""Command-line interface: ingest, wipe, reindex, eval."""
 
 import logging
+from pathlib import Path
 
 import typer
 from sqlalchemy import create_engine
@@ -11,11 +12,14 @@ from arxiv_rag.db.repo import Repository
 from arxiv_rag.ingest.client import ArxivClient
 from arxiv_rag.ingest.pipeline import IngestPipeline
 from arxiv_rag.rag.embeddings import build_embedder
+from arxiv_rag.rag.evaluation import load_questions, run_eval
 from arxiv_rag.rag.indexer import EmbeddingIndexer
+from arxiv_rag.rag.retrieve import PaperRetriever
 
 app = typer.Typer(help="Ingest arXiv papers into Postgres and manage the dataset.")
 
 DEFAULT_CATEGORIES = "cs.AI,cs.LG,cs.CL"
+DEFAULT_QUESTIONS_PATH = "eval/retrieval_questions.yaml"
 
 
 def _open_session() -> Session:
@@ -95,6 +99,40 @@ def reindex(
     finally:
         session.close()
     typer.echo(f"Reindex complete: {summary}")
+
+
+@app.command()
+def eval(
+    question_set: Path = typer.Argument(
+        DEFAULT_QUESTIONS_PATH, exists=False, help="YAML file with questions + expected arxiv_ids."
+    ),
+    top_k: int = typer.Option(
+        10, "--top-k", min=1, help="How many papers to retrieve per question."
+    ),
+) -> None:
+    """Run the retrieval evaluation: hit@1/3/5 over the question set (no LLM)."""
+    settings = get_settings()
+    session = _open_session()
+    try:
+        questions = load_questions(Path(question_set))
+        embedder = build_embedder(settings)
+        retriever = PaperRetriever(Repository(session), embedder, top_k=top_k, min_score=0.0)
+        report = run_eval(questions, lambda q: [s.arxiv_id for s in retriever.retrieve(q).sources])
+    except Exception as exc:
+        typer.echo(f"eval failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        session.close()
+
+    typer.echo(f"Evaluated {len(report.results)} questions (retrieving top {top_k}):")
+    for k in report.ks:
+        typer.echo(f"  hit@{k}: {report.mean_hit_at(k):.1%}")
+    if misses := report.misses(k=report.ks[-1]):
+        typer.echo("Misses:")
+        for miss in misses:
+            typer.echo(
+                f"  - {miss.question.question}  (expected: {', '.join(miss.question.expected)})"
+            )
 
 
 def main() -> None:

@@ -1,15 +1,45 @@
-# Hand-written retrieval eval questions with the arxiv_ids that should be
-# retrieved. A sanity harness for retrieval quality and model comparison —
-# not a benchmark. Expanded to the full 15-20 question set after the
-# full-dataset ingest (see plan Step 27).
+# Hand-written retrieval eval questions with the arxiv_ids a good system
+# should retrieve. Questions are deliberately paraphrased (not title copies)
+# so embeddings must match meaning, not words. One question is deliberately
+# unanswerable ("expected: none") to expose the similarity floor.
+#
+# Sanity harness for retrieval quality and model comparison — not a benchmark.
 questions:
-  - question: How do agents handle the stability-plasticity tradeoff in memory?
-    expected: ["2609.30558"]
-  - question: What is the CARGO evaluation framework for agentic AI?
+  - question: How can reinforcement learning agents predict whether a task will succeed before trying it?
+    expected: ["2609.30226"]
+  - question: What framework evaluates agentic AI in production using context-aware retrieval gating?
     expected: ["2609.30471"]
-  - question: Does uniform discrete diffusion need time scheduling?
+  - question: How do agents balance keeping old memories against learning new ones?
+    expected: ["2609.30558"]
+  - question: Does discrete diffusion require an explicit time variable to work?
     expected: ["2609.30977"]
-  - question: How can models estimate and orthogonalize unknown pre-training gradients?
-    expected: ["2609.30935"]
-  - question: What is a deliberately unanswerable question about underwater basket weaving?
+  - question: How can you tell if a large language model saw a document during pretraining, using free energy?
+    expected: ["2609.21888"]
+  - question: Why does knowledge fail to transfer between languages during pretraining?
+    expected: ["2609.19291"]
+  - question: How strongly should an agent's internal task representation drive its behavior?
+    expected: ["2609.25686"]
+  - question: What is a practical post-training recipe for open-weight language models?
+    expected: ["2609.29421"]
+  - question: Is chain-of-thought causally grounded, and how could we test that with interventions?
+    expected: ["2609.23065"]
+  - question: How should we evaluate computer-use agents on their process rather than just final results?
+    expected: ["2609.24890"]
+  - question: What does the linear representation hypothesis miss about group structure?
+    expected: ["2609.27158"]
+  - question: How can routing between different models cut the cost of multi-step agentic workflows?
+    expected: ["2609.22951"]
+  - question: When should rerankers in multi-hop retrieval be switched on per query?
+    expected: ["2609.22880"]
+  - question: Can disagreements between language models tell us where expert effort is best spent?
+    expected: ["2609.26926"]
+  - question: What memory architecture tracks individual speakers in multi-party conversations?
+    expected: ["2609.26780"]
+  - question: How can hallucination detection use the topology of a model's internal context?
+    expected: ["2609.21096"]
+  - question: Which papers benchmark cognitive traps in how language models use memory?
+    expected: ["2608.20202"]
+  - question: What work studies learning from a year of smartphone usage data on devices?
+    expected: ["2608.13606"]
+  - question: What is the best sourdough bread recipe?
     expected: ["none"]

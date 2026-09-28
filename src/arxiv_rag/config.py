@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     # RAG retrieval / answering
     rag_top_k: int = 5
-    min_score: float = 0.25
+    min_score: float = 0.55  # tuned on eval: relevant matches score ~0.6-0.8, off-topic <0.5
     max_context_chars: int = 12000
 
     # LLM — any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, Ollama, ...)

@@ -24,7 +24,7 @@ def test_defaults_match_the_plan():
     assert s.embed_dim == 768
     assert s.embed_batch_size == 32
     assert s.rag_top_k == 5
-    assert s.min_score == 0.25
+    assert s.min_score == 0.55  # tuned: real matches score 0.6+, off-topic <0.5
     assert s.max_context_chars == 12000
     assert s.llm_base_url == "https://api.openai.com/v1"
     assert s.llm_api_key == ""  # only /ask needs it; must not break startup

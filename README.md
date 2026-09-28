@@ -135,18 +135,24 @@ paper_embeddings(paper_id, VECTOR(768), model, embedded_at)   -- RAG index, sepa
 
 ## Retrieval quality (hit@k)
 
-`eval/retrieval_questions.yaml` holds hand-written questions with the
-arxiv_ids a good system should retrieve. The `eval` command runs retrieval
-only (no LLM) and reports hit@1/3/5:
+`eval/retrieval_questions.yaml` holds 19 hand-written questions with the
+arxiv_ids a good system should retrieve — deliberately paraphrased, not title
+copies, plus one unanswerable question exposing the similarity floor. The
+`eval` command runs retrieval only (no LLM) and reports hit@1/3/5:
 
 ```bash
 docker compose run --rm api arxiv-rag eval
-# Evaluated 5 questions (retrieving top 10):
-#   hit@1: 80.0%   hit@3: 80.0%   hit@5: 80.0%
+# Evaluated 19 questions (retrieving top 10):
+#   hit@1: 84.2%   hit@3: 84.2%   hit@5: 84.2%
 ```
 
-It is a sanity harness for regressions and embedding-model comparison —
-not a benchmark claim (the set is small by design).
+On the 1,000-paper index, 16 of 18 answerable questions place their target
+paper at rank 1. The two misses retrieve semantically adjacent papers (e.g. a
+question about predicting RL task outcomes matches papers on early-failure
+prediction and hindsight). The unanswerable question's best match scores 0.50
+vs. 0.63–0.81 for real matches, which is how `MIN_SCORE=0.55` was tuned: an
+off-topic question now returns an honest `matched: false` instead of forcing a
+weak answer. It is a sanity harness — not a benchmark claim.
 
 ## Environment variables
 

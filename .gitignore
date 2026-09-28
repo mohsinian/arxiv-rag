@@ -1,0 +1,47 @@
+# Assessment plan & notes (private — must never be pushed)
+plan/
+
+# Secrets / environment — never commit real keys
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local data & vector stores produced by ingestion / RAG indexing
+data/
+*.sqlite3
+*.db
+chroma_store/
+faiss_store/
+
+# Docker local overrides (docker-compose.yml itself IS committed)
+docker-compose.override.yml
+
+# Logs & scratch
+*.log
+tmp/
+
+# Editors & IDEs
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

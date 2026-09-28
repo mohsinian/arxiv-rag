@@ -14,6 +14,8 @@ dependencies = [
     "typer>=0.12",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "sentence-transformers>=3",
+    "openai>=1.40",
 ]
 
 [project.scripts]
@@ -37,10 +39,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration and not slow'"
 markers = [
     "unit: fast tests with no external dependencies (DB, network, model weights)",
     "integration: tests that need a running Postgres (see `make test-integration`)",
+    "slow: tests that download model weights or take minutes (run explicitly)",
 ]
 
 [tool.ruff]

@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from sqlalchemy import Select, bindparam, select
-from sqlalchemy.orm import Session
 
 from arxiv_rag.db import models
 from arxiv_rag.db.repo import Repository
@@ -23,6 +22,9 @@ class RetrievedPaper:
     title: str
     abstract: str
     score: float
+    published: str = ""  # YYYY-MM-DD
+    category: str = ""  # primary arXiv category
+    authors: str = ""  # "A. Author, B. Author et al."
 
 
 @dataclass(frozen=True)
@@ -55,31 +57,29 @@ def similar_papers_query(k: int) -> Select:
 class PaperRetriever:
     """Embeds a question and returns the most similar papers with similarity scores."""
 
-    def __init__(
-        self,
-        repo: Repository,
-        embedder: QueryEmbedder,
-        top_k: int,
-        min_score: float,
-        session: Session | None = None,
-    ) -> None:
+    def __init__(self, repo: Repository, embedder: QueryEmbedder, top_k: int, min_score: float):
         self._repo = repo
         self._embedder = embedder
         self._top_k = top_k
         self._min_score = min_score
-        self._session = session
 
     def retrieve(self, question: str) -> RetrievalResult:
         vector = self._embedder.embed_query(question)
         rows = self._repo.execute_similar_papers(similar_papers_query(k=self._top_k), vector)
-        sources = [
-            RetrievedPaper(
-                arxiv_id=row.arxiv_id,
-                title=row.title,
-                abstract=row.abstract,
-                score=round(row.score, 4),
+        metadata = self._repo.papers_metadata([row.arxiv_id for row in rows])
+        sources = []
+        for row in rows:
+            meta = metadata.get(row.arxiv_id, {})
+            sources.append(
+                RetrievedPaper(
+                    arxiv_id=row.arxiv_id,
+                    title=row.title,
+                    abstract=row.abstract,
+                    score=round(row.score, 4),
+                    published=meta.get("published", ""),
+                    category=meta.get("category", ""),
+                    authors=meta.get("authors", ""),
+                )
             )
-            for row in rows
-        ]
         sources = [source for source in sources if source.score >= self._min_score]
         return RetrievalResult(sources=sources, matched=bool(sources))

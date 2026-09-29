@@ -107,3 +107,12 @@ def test_empty_index_is_an_honest_miss(pg_session):
     result = retriever.retrieve("anything")
     assert result.sources == []
     assert not result.matched
+
+
+def test_retrieved_papers_carry_metadata(planted):
+    retriever = PaperRetriever(planted, FixedQueryEmbedder(sparse(1.0)), top_k=1, min_score=0.0)
+    result = retriever.retrieve("anything")
+    source = result.sources[0]
+    assert source.published == "2024-01-10"
+    assert source.category == "cs.LG"
+    assert source.authors == "Alice Researcher"

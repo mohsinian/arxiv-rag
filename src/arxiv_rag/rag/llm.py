@@ -15,7 +15,7 @@ class OpenAICompatibleChat:
     needs one.
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str, temperature: float = 0.2) -> None:
+    def __init__(self, base_url: str, api_key: str, model: str, temperature: float = 0.0) -> None:
         self._base_url = base_url
         self._api_key = api_key
         self._model = model

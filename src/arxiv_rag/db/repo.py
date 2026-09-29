@@ -206,6 +206,38 @@ class Repository:
         """Run a similarity query with the query vector bound as a parameter."""
         return self._session.execute(stmt, {"query_vector": query_vector}).all()
 
+    def papers_metadata(self, arxiv_ids: Sequence[str]) -> dict[str, dict]:
+        """Display metadata for the given papers: published date, primary
+        category, and up to three authors (then 'et al.'), author-ordered."""
+        rows = self._session.execute(
+            select(
+                models.Paper.arxiv_id,
+                models.Paper.published_at,
+                models.Category.arxiv_category,
+                models.Author.name,
+            )
+            .join(models.Category, models.Category.id == models.Paper.primary_category_id)
+            .join(models.paper_authors, models.paper_authors.c.paper_id == models.Paper.id)
+            .join(models.Author, models.Author.id == models.paper_authors.c.author_id)
+            .where(models.Paper.arxiv_id.in_(list(arxiv_ids)))
+            .order_by(models.paper_authors.c.position)
+        ).all()
+        metadata: dict[str, dict] = {}
+        for arxiv_id, published_at, category, name in rows:
+            entry = metadata.setdefault(
+                arxiv_id,
+                {
+                    "published": published_at.date().isoformat() if published_at else "",
+                    "category": category or "",
+                    "authors": [],
+                },
+            )
+            entry["authors"].append(name)
+        for entry in metadata.values():
+            names = entry["authors"]
+            entry["authors"] = ", ".join(names[:3]) + (" et al." if len(names) > 3 else "")
+        return metadata
+
     # -- upsert internals ---------------------------------------------------
 
     def _upsert_one(self, record_: PaperRecord, caches: _LookupCaches) -> str:

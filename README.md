@@ -141,42 +141,37 @@ paper_embeddings(paper_id, VECTOR(768), model, embedded_at)   -- RAG index, sepa
 
 ## Retrieval quality (hit@k)
 
-`eval/retrieval_questions.yaml` holds 19 hand-written questions with the
-arxiv_ids a good system should retrieve — deliberately paraphrased, not title
-copies, plus one unanswerable question exposing the similarity floor. The
-`eval` command runs retrieval only (no LLM), labels its own setup, and reports
-hit@1/3/5, MRR, and no-match accuracy:
+`eval/retrieval_questions.yaml` holds 30 hand-written questions in two batches:
+
+- **Batch A** (19, assistant-authored): paraphrased from sampled papers, deliberately avoiding title wording; 1 unanswerable probe.
+- **Batch B** (11, **independently authored**): written via a local authoring UI by a human reader with no knowledge of the retrieval system; 3 unanswerable probes. Gold lists are post-adjudication — where the originally-mapped paper did not actually answer the question, or several papers genuinely answer it, `expected` lists the acceptable papers.
+
+`eval` runs retrieval only (no LLM), labels its setup, and reports hit@1/3/5, MRR, and no-match accuracy:
 
 ```bash
 docker compose run --rm api arxiv-rag eval
 # Retrieval setup: vector-only · Alibaba-NLP/gte-modernbert-base · top 10 · min_score 0.55
-# Evaluated 19 questions (18 answerable):
-#   hit@1: 83.3%   hit@3: 88.9%   hit@5: 88.9%
-#   MRR: 0.861
-#   no-match accuracy: 1/1 unanswerable questions rejected
+# Evaluated 30 questions (26 answerable):
+#   hit@1: 73.1%   hit@3: 80.8%   hit@5: 84.6%
+#   MRR: 0.774
+#   no-match accuracy: 3/4 unanswerable questions rejected
 ```
 
-How to read it (both indexes, vector-only retrieval):
+Per batch (3,000-paper index, vector-only, top 10):
 
-| Index (cs.AI+cs.LG+cs.CL) | hit@1 | hit@3 | hit@5 | MRR |
-|---|---|---|---|---|
-| 1,000 papers (default ingest) | 88.9% | 88.9% | 88.9% | — |
-| 3,000 papers | 83.3% | 88.9% | 88.9% | 0.861 |
+| Batch | hit@1 | hit@3 | hit@5 | MRR | Notes |
+|---|---|---|---|---|---|
+| A — assistant-authored (18 answerable) | 83.3% | 88.9% | 88.9% | 0.861 | author knew the retrieval design |
+| B — independent, **strict** user golds (8 answerable) | 0% | 0% | 0% | 0.079 | hits: 3/8 within top 10 |
+| B — independent, **post-adjudication** golds | 50.0% | 75.0% | 75.0% | 0.579 | 7/8 within top 10 |
+| Combined (26 answerable) | 73.1% | 80.8% | 84.6% | 0.774 | reported by `eval` |
 
-(hit rates over 18 answerable questions; the 1,000-paper row was measured
-before MRR was added.) Tripling the corpus cost one rank-1 position — a gold
-paper pushed to rank 2 by a new competing paper — while recall held: the
-retrieved-set quality is stable, which is the reranker's exact use case. The
-two persistent misses are genuine recall failures, not ranking ones: at
-top-30 the gold papers still don't appear, and by-hand analysis shows the
-questions' phrasing matching other papers more closely than the gold (e.g.
-the gold "post-training recipe" paper scores 0.72 against its question while
-related post-training papers score 0.78+). That is the query-rewriting gap,
-not a reranking gap. `MIN_SCORE=0.55` was tuned on the score separation
-between real matches (0.63–0.81) and the unanswerable question's best match
-(0.50), which is what the no-match accuracy row verifies. This is a sanity
-harness — not a benchmark claim (19 questions means one question ≈ 5 points;
-confidence intervals are wide).
+How to read this honestly:
+
+- **Independent questions are much harder** than assistant-authored ones (3/8 vs 15/18 on strict golds). Manual adjudication of the 5 misses found only 1 genuine retrieval failure; 3 were mapping errors (the question's paper didn't actually answer it, while retrieval's top results did), and 1 had several valid papers with the gold outside the top 10. Authoring bias cuts both ways — an eval needs independent *questions* *and* validated *golds*.
+- The 1 remaining Batch-A recall miss plus the "type-safe LLM" miss are the query-rewriting gap: the gold papers sit below rank 10 even at top-30 (e.g. the post-training-recipe gold scores 0.72 against its question while related papers score 0.78+).
+- **No-match accuracy**: 3/4 unanswerable questions are correctly rejected at `MIN_SCORE=0.55`; one probe scored 0.58 and slips through — the threshold is a tunable compromise, and this metric exists to expose exactly that.
+- This is a sanity harness, not a benchmark claim: 26 answerable questions means one question ≈ 4 points, and confidence intervals are wide.
 
 ## Environment variables
 
@@ -226,9 +221,10 @@ answer, evaluation), `api/` (FastAPI app), `cli.py`; `migrations/` Alembic;
 7. **No ANN index** (HNSW) on the embedding column — exact scan is fine at ≤5k
    vectors; needed at scale.
 8. The eval set is intentionally small (sanity harness, not a benchmark;
-   one question ≈ 5 points, and questions were authored after reading the
-   papers — an authoring-bias caveat until the set grows and gains
-   independently-written questions).
+   one question ≈ 4 points). Batch B is independently authored, but golds
+   were adjudicated by the assistant — a fully blind labeling pass would
+   remove the last bit of authoring asymmetry. MIN_SCORE was tuned on a
+   handful of unanswerable probes; one of four still slips through.
 9. Citation validation is mechanical (every cited number must be a provided
    passage); whether cited passages actually entail each answer claim is not
    automatically checked.

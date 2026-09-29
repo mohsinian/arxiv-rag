@@ -1,45 +1,76 @@
 # Hand-written retrieval eval questions with the arxiv_ids a good system
-# should retrieve. Questions are deliberately paraphrased (not title copies)
-# so embeddings must match meaning, not words. One question is deliberately
-# unanswerable ("expected: none") to expose the similarity floor.
+# should retrieve. Two batches:
 #
-# Sanity harness for retrieval quality and model comparison — not a benchmark.
+# Batch A (assistant-authored): paraphrased from sampled papers; questions
+#   deliberately avoid title wording. One deliberately unanswerable (sourdough).
+# Batch B (independently authored): written via a local authoring UI by a
+#   human reader with no knowledge of the retrieval system. Golds are
+#   post-adjudication: where the originally-mapped paper did not actually
+#   answer the question (mapping error) or several papers genuinely answer
+#   it, `expected` lists the acceptable papers. Pre-adjudication (strict)
+#   numbers are reported alongside in the README.
+#
+# Sanity harness for retrieval quality — not a benchmark claim.
 questions:
-  - question: How can reinforcement learning agents predict whether a task will succeed before trying it?
+  - question: "How can reinforcement learning agents predict whether a task will succeed before trying it?"
     expected: ["2609.30226"]
-  - question: What framework evaluates agentic AI in production using context-aware retrieval gating?
+  - question: "What framework evaluates agentic AI in production using context-aware retrieval gating?"
     expected: ["2609.30471"]
-  - question: How do agents balance keeping old memories against learning new ones?
+  - question: "How do agents balance keeping old memories against learning new ones?"
     expected: ["2609.30558"]
-  - question: Does discrete diffusion require an explicit time variable to work?
+  - question: "Does discrete diffusion require an explicit time variable to work?"
     expected: ["2609.30977"]
-  - question: How can you tell if a large language model saw a document during pretraining, using free energy?
+  - question: "How can you tell if a large language model saw a document during pretraining, using free energy?"
     expected: ["2609.21888"]
-  - question: Why does knowledge fail to transfer between languages during pretraining?
+  - question: "Why does knowledge fail to transfer between languages during pretraining?"
     expected: ["2609.19291"]
-  - question: How strongly should an agent's internal task representation drive its behavior?
+  - question: "How strongly should an agent's internal task representation drive its behavior?"
     expected: ["2609.25686"]
-  - question: What is a practical post-training recipe for open-weight language models?
+  - question: "What is a practical post-training recipe for open-weight language models?"
     expected: ["2609.29421"]
-  - question: Is chain-of-thought causally grounded, and how could we test that with interventions?
+  - question: "Is chain-of-thought causally grounded, and how could we test that with interventions?"
     expected: ["2609.23065"]
-  - question: How should we evaluate computer-use agents on their process rather than just final results?
+  - question: "How should we evaluate computer-use agents on their process rather than just final results?"
     expected: ["2609.24890"]
-  - question: What does the linear representation hypothesis miss about group structure?
+  - question: "What does the linear representation hypothesis miss about group structure?"
     expected: ["2609.27158"]
-  - question: How can routing between different models cut the cost of multi-step agentic workflows?
+  - question: "How can routing between different models cut the cost of multi-step agentic workflows?"
     expected: ["2609.22951"]
-  - question: When should rerankers in multi-hop retrieval be switched on per query?
+  - question: "When should rerankers in multi-hop retrieval be switched on per query?"
     expected: ["2609.22880"]
-  - question: Can disagreements between language models tell us where expert effort is best spent?
+  - question: "Can disagreements between language models tell us where expert effort is best spent?"
     expected: ["2609.26926"]
-  - question: What memory architecture tracks individual speakers in multi-party conversations?
+  - question: "What memory architecture tracks individual speakers in multi-party conversations?"
     expected: ["2609.26780"]
-  - question: How can hallucination detection use the topology of a model's internal context?
+  - question: "How can hallucination detection use the topology of a model's internal context?"
     expected: ["2609.21096"]
-  - question: Which papers benchmark cognitive traps in how language models use memory?
+  - question: "Which papers benchmark cognitive traps in how language models use memory?"
     expected: ["2608.20202"]
-  - question: What work studies learning from a year of smartphone usage data on devices?
+  - question: "What work studies learning from a year of smartphone usage data on devices?"
     expected: ["2608.13606"]
-  - question: What is the best sourdough bread recipe?
+  - question: "What is the best sourdough bread recipe?"
+    expected: ["none"]
+
+  # --- Batch B: independently authored (post-adjudication golds) ---
+  - question: "how to pick a good LLM?"
+    expected: ["2602.16610", "2511.20604"]
+  - question: "how to come up with a system that ranks the latest releases of LLM models?"
+    expected: ["2511.20604", "2609.30074", "2604.22891"]
+  - question: "how to train LLM effectively for maximum gain?"
+    expected: ["2606.07527"]
+  - question: "how do i find a lightweight model that helps me take simple binary decisions with yes no kind of thing?"
+    expected: ["2609.33843", "2512.12868"]
+  - question: "In south Asian or Indian market do we have any system for detecting transaction disputes effectively?"
+    expected: ["2602.05794"]
+  - question: "how good LLMs are at doing maths?"
+    expected: ["2605.07600"]
+  - question: "how can we be safe while typing prompts to the LLMs or ai agents?"
+    expected: ["2604.08499", "2603.14417", "2601.15331"]
+  - question: "why do we need type safe LLm model?"
+    expected: ["2609.33209"]
+  - question: "how much effect soya sauce has in Chinese cooking?"
+    expected: ["none"]
+  - question: "what methods to follow to get better at penalty shootout?"
+    expected: ["none"]
+  - question: "if the first world war never happened, what were the chances of the second world war?"
     expected: ["none"]

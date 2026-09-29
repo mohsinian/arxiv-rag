@@ -111,7 +111,13 @@ curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
 }
 ```
 
-When nothing relevant is indexed, the LLM is never called: `matched` is `false`,
+The LLM must return a structured reply (`answer`, `cited_passages`,
+`sufficient_context`); citation numbers are validated in code and **only the
+passages the model actually cited become `sources`**. Prompts wrap passages as
+untrusted XML with metadata (authors, date, category) and instruct the model
+that it sees a *sample* of the dataset — no corpus-level claims, no following
+instructions hidden in abstracts, partial answers allowed. When retrieval finds
+nothing above `MIN_SCORE`, the LLM is never called: `matched` is `false`,
 `sources` is empty, and `answer` says so. Blank/oversized questions return 422;
 LLM provider failures return 502 — never a fabricated answer.
 
@@ -138,21 +144,39 @@ paper_embeddings(paper_id, VECTOR(768), model, embedded_at)   -- RAG index, sepa
 `eval/retrieval_questions.yaml` holds 19 hand-written questions with the
 arxiv_ids a good system should retrieve — deliberately paraphrased, not title
 copies, plus one unanswerable question exposing the similarity floor. The
-`eval` command runs retrieval only (no LLM) and reports hit@1/3/5:
+`eval` command runs retrieval only (no LLM), labels its own setup, and reports
+hit@1/3/5, MRR, and no-match accuracy:
 
 ```bash
 docker compose run --rm api arxiv-rag eval
-# Evaluated 19 questions (retrieving top 10):
-#   hit@1: 84.2%   hit@3: 84.2%   hit@5: 84.2%
+# Retrieval setup: vector-only · Alibaba-NLP/gte-modernbert-base · top 10 · min_score 0.55
+# Evaluated 19 questions (18 answerable):
+#   hit@1: 83.3%   hit@3: 88.9%   hit@5: 88.9%
+#   MRR: 0.861
+#   no-match accuracy: 1/1 unanswerable questions rejected
 ```
 
-On the 1,000-paper index, 16 of 18 answerable questions place their target
-paper at rank 1. The two misses retrieve semantically adjacent papers (e.g. a
-question about predicting RL task outcomes matches papers on early-failure
-prediction and hindsight). The unanswerable question's best match scores 0.50
-vs. 0.63–0.81 for real matches, which is how `MIN_SCORE=0.55` was tuned: an
-off-topic question now returns an honest `matched: false` instead of forcing a
-weak answer. It is a sanity harness — not a benchmark claim.
+How to read it (both indexes, vector-only retrieval):
+
+| Index (cs.AI+cs.LG+cs.CL) | hit@1 | hit@3 | hit@5 | MRR |
+|---|---|---|---|---|
+| 1,000 papers (default ingest) | 88.9% | 88.9% | 88.9% | — |
+| 3,000 papers | 83.3% | 88.9% | 88.9% | 0.861 |
+
+(hit rates over 18 answerable questions; the 1,000-paper row was measured
+before MRR was added.) Tripling the corpus cost one rank-1 position — a gold
+paper pushed to rank 2 by a new competing paper — while recall held: the
+retrieved-set quality is stable, which is the reranker's exact use case. The
+two persistent misses are genuine recall failures, not ranking ones: at
+top-30 the gold papers still don't appear, and by-hand analysis shows the
+questions' phrasing matching other papers more closely than the gold (e.g.
+the gold "post-training recipe" paper scores 0.72 against its question while
+related post-training papers score 0.78+). That is the query-rewriting gap,
+not a reranking gap. `MIN_SCORE=0.55` was tuned on the score separation
+between real matches (0.63–0.81) and the unanswerable question's best match
+(0.50), which is what the no-match accuracy row verifies. This is a sanity
+harness — not a benchmark claim (19 questions means one question ≈ 5 points;
+confidence intervals are wide).
 
 ## Environment variables
 
@@ -201,6 +225,10 @@ answer, evaluation), `api/` (FastAPI app), `cli.py`; `migrations/` Alembic;
    collapse into one row (no ORCID in the arXiv API).
 7. **No ANN index** (HNSW) on the embedding column — exact scan is fine at ≤5k
    vectors; needed at scale.
-8. The eval set is intentionally small (sanity harness, not a benchmark);
-   MIN_SCORE was eyeballed on a handful of unanswerable questions, not tuned
-   systematically.
+8. The eval set is intentionally small (sanity harness, not a benchmark;
+   one question ≈ 5 points, and questions were authored after reading the
+   papers — an authoring-bias caveat until the set grows and gains
+   independently-written questions).
+9. Citation validation is mechanical (every cited number must be a provided
+   passage); whether cited passages actually entail each answer claim is not
+   automatically checked.

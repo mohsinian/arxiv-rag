@@ -110,13 +110,15 @@ def eval(
         10, "--top-k", min=1, help="How many papers to retrieve per question."
     ),
 ) -> None:
-    """Run the retrieval evaluation: hit@1/3/5 over the question set (no LLM)."""
+    """Run the retrieval evaluation: hit@1/3/5, MRR, no-match accuracy (no LLM)."""
     settings = get_settings()
     session = _open_session()
     try:
         questions = load_questions(Path(question_set))
         embedder = build_embedder(settings)
-        retriever = PaperRetriever(Repository(session), embedder, top_k=top_k, min_score=0.0)
+        retriever = PaperRetriever(
+            Repository(session), embedder, top_k=top_k, min_score=settings.min_score
+        )
         report = run_eval(questions, lambda q: [s.arxiv_id for s in retriever.retrieve(q).sources])
     except Exception as exc:
         typer.echo(f"eval failed: {exc}", err=True)
@@ -124,9 +126,18 @@ def eval(
     finally:
         session.close()
 
-    typer.echo(f"Evaluated {len(report.results)} questions (retrieving top {top_k}):")
+    answerable = len(report.answerable)
+    typer.echo(
+        f"Retrieval setup: vector-only · {settings.embedding_model} · "
+        f"top {top_k} · min_score {settings.min_score}"
+    )
+    typer.echo(f"Evaluated {len(report.results)} questions ({answerable} answerable):")
     for k in report.ks:
         typer.echo(f"  hit@{k}: {report.mean_hit_at(k):.1%}")
+    typer.echo(f"  MRR: {report.mrr():.3f}")
+    correct, total = report.no_match_stats()
+    if total:
+        typer.echo(f"  no-match accuracy: {correct}/{total} unanswerable questions rejected")
     if misses := report.misses(k=report.ks[-1]):
         typer.echo("Misses:")
         for miss in misses:

@@ -32,19 +32,53 @@ class QuestionResult:
     def hit(self, k: int) -> bool:
         return hit_at_k(self.retrieved, self.question.expected, k)
 
+    @property
+    def is_unanswerable(self) -> bool:
+        return self.question.expected == ["none"]
+
+    def rank_of_first_hit(self) -> int | None:
+        for index, arxiv_id in enumerate(self.retrieved, 1):
+            if arxiv_id in self.question.expected:
+                return index
+        return None
+
 
 @dataclass
 class EvalReport:
     results: list[QuestionResult]
     ks: tuple[int, ...] = DEFAULT_KS
 
+    @property
+    def answerable(self) -> list[QuestionResult]:
+        return [result for result in self.results if not result.is_unanswerable]
+
     def mean_hit_at(self, k: int) -> float:
-        if not self.results:
+        answerable = self.answerable
+        if not answerable:
             return 0.0
-        return sum(result.hit(k) for result in self.results) / len(self.results)
+        return sum(result.hit(k) for result in answerable) / len(answerable)
+
+    def mrr(self) -> float:
+        """Mean reciprocal rank over answerable questions (0 for a total miss)."""
+        answerable = self.answerable
+        if not answerable:
+            return 0.0
+        return sum(
+            1 / rank if (rank := result.rank_of_first_hit()) else 0.0 for result in answerable
+        ) / len(answerable)
+
+    def no_match_stats(self) -> tuple[int, int]:
+        """(correctly rejected, total) over unanswerable questions.
+
+        An unanswerable question is correctly rejected when nothing above the
+        similarity floor was retrieved for it.
+        """
+        unanswerable = [result for result in self.results if result.is_unanswerable]
+        correct = sum(1 for result in unanswerable if not result.retrieved)
+        return correct, len(unanswerable)
 
     def misses(self, k: int) -> list[QuestionResult]:
-        return [result for result in self.results if not result.hit(k)]
+        return [result for result in self.answerable if not result.hit(k)]
 
 
 def load_questions(path: Path) -> list[EvalQuestion]:

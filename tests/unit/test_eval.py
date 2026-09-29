@@ -127,3 +127,36 @@ def test_report_lists_misses():
     misses = report.misses(k=3)
     assert len(misses) == 1
     assert misses[0].question.question == "hard question"
+
+
+# -- unanswerable questions + MRR ------------------------------------------------
+
+
+def test_unanswerable_questions_are_excluded_from_hit_rates():
+    result = QuestionResult(
+        question=EvalQuestion(question="sourdough?", expected=["none"]), retrieved=["x", "y"]
+    )
+    hit = QuestionResult(question=EvalQuestion(question="real q", expected=["a"]), retrieved=["a"])
+    report = EvalReport(results=[result, hit])
+    assert report.mean_hit_at(1) == 1.0  # only the answerable question counts
+
+
+def test_no_match_accuracy_counts_correctly_rejected_questions():
+    rejected = QuestionResult(
+        question=EvalQuestion(question="q1", expected=["none"]),
+        retrieved=[],  # correctly nothing
+    )
+    forced = QuestionResult(
+        question=EvalQuestion(question="q2", expected=["none"]), retrieved=["some-paper"]
+    )
+    correct, total = EvalReport(results=[rejected, forced]).no_match_stats()
+    assert (correct, total) == (1, 2)
+
+
+def test_mrr_is_reciprocal_rank_of_first_hit():
+    results = [
+        QuestionResult(question=EvalQuestion(question="q1", expected=["a"]), retrieved=["a", "b"]),
+        QuestionResult(question=EvalQuestion(question="q2", expected=["b"]), retrieved=["x", "b"]),
+        QuestionResult(question=EvalQuestion(question="q3", expected=["c"]), retrieved=["x", "y"]),
+    ]
+    assert EvalReport(results=results).mrr() == (1 / 1 + 1 / 2 + 0) / 3

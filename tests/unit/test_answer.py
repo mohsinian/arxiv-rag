@@ -320,3 +320,27 @@ def test_sufficient_but_uncited_strips_dangling_markers():
     assert result.matched is False
     assert result.sources == []
     assert result.answer == "Vague claims."
+
+
+def test_fallback_drops_markers_that_cannot_resolve():
+    llm = FakeLLM("Unsupported claim [7].")  # only passages 1-2 were shown
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is True
+    assert result.answer == "Unsupported claim."
+    assert len(result.sources) == 2
+
+
+def test_fallback_keeps_resolvable_markers_verbatim():
+    llm = FakeLLM("Shown in [2] and also [1].")
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.answer == "Shown in [2] and also [1]."
+    assert [s.arxiv_id for s in result.sources] == ["2401.00001", "2401.00002"]
+
+
+@pytest.mark.parametrize("cited", ["12", [1, "2"], [True]])
+def test_schema_violating_cited_passages_breaks_contract(cited):
+    # a string would iterate as [1, 2]; mixed/bool entries are equally invalid
+    reply = json.dumps({"answer": "a [1]", "cited_passages": cited, "sufficient_context": True})
+    result = AnswerGenerator(FakeLLM(reply)).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is True  # fallback: retrieval matched, reply unparseable
+    assert len(result.sources) == 2

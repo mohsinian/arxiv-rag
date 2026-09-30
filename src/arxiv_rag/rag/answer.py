@@ -10,9 +10,10 @@ from the prompt) is an ungrounded answer and is reported as a no-match with
 its markers stripped. A reply that reports insufficient context keeps its
 answer and cited sources (so `[n]` still resolves) but is flagged
 `matched=false` for the incompleteness. A reply that violates the JSON
-contract (including a non-boolean sufficient_context) degrades to a
-conservative fallback — the raw text with the passages shown to the
-model — rather than failing the request.
+contract (including a non-boolean sufficient_context or a non-array
+cited_passages) degrades to a conservative fallback — the raw text with
+the passages shown to the model, with any marker that cannot resolve
+against them removed — rather than failing the request.
 """
 
 import json
@@ -115,11 +116,12 @@ class AnswerGenerator:
 
         parsed = self._parse_reply(raw)
         if parsed is None:
-            # the shown passages are a prefix (1..k), so any [n] in the raw
-            # text already lines up with the returned sources
+            # the shown passages are a prefix (1..k), so in-range [n] markers
+            # in the raw text already line up with the returned sources; the
+            # renumber pass is the identity for those and strips the rest
             logger.warning("LLM reply violated the JSON contract; falling back to shown passages")
             return Answered(
-                answer=raw.strip(),
+                answer=self._renumber_citations(raw.strip(), shown),
                 matched=True,
                 sources=[retrieval.sources[number - 1] for number in shown],
             )
@@ -239,7 +241,15 @@ class AnswerGenerator:
             start, end = text.index("{"), text.rindex("}")
             data = json.loads(text[start : end + 1])
             answer = str(data["answer"]).strip()
-            cited = [int(number) for number in data.get("cited_passages", [])]
+            raw_cited = data.get("cited_passages", [])
+            if not isinstance(raw_cited, list) or not all(
+                # bool is an int subclass — True is not a citation number;
+                # a string like "12" would iterate as [1, 2]
+                isinstance(number, int) and not isinstance(number, bool)
+                for number in raw_cited
+            ):
+                return None
+            cited = list(raw_cited)
             sufficient = data["sufficient_context"]
             if not isinstance(sufficient, bool):
                 # "false"/"no"/"" are all truthy to bool() — a non-boolean

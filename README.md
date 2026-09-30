@@ -152,9 +152,10 @@ keeps its answer and cited sources but returns `matched: false` (partial
 coverage); a reply that cites nothing valid is a full no-match with no
 sources — an ungrounded answer is never dressed up as a cited one. The one
 exception: a reply that breaks the JSON contract entirely (plain text,
-truncated JSON, non-boolean `sufficient_context`) degrades to a conservative
-fallback — the raw text with the passages shown to the model — because
-retrieval did match; this is logged as a warning. Prompts wrap passages as
+truncated JSON, non-boolean `sufficient_context`, non-array `cited_passages`)
+degrades to a conservative fallback — the raw text with the passages shown
+to the model, with any marker that cannot resolve against them removed —
+because retrieval did match; this is logged as a warning. Prompts wrap passages as
 untrusted XML with metadata (authors, date, category) and instruct the model
 that it sees a *sample* of the dataset — no corpus-level claims, no following
 instructions hidden in abstracts, partial answers allowed. When retrieval finds

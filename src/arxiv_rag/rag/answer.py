@@ -2,12 +2,14 @@
 
 The LLM must return JSON: {answer, cited_passages, sufficient_context}.
 Citation numbers are validated in code against the passages actually shown
-to the model, and only cited passages become the response's sources.
+to the model, and only cited passages become the response's sources. The
+`[n]` markers in the answer are renumbered to match: `[n]` always refers to
+`sources[n - 1]` in the response, never to the prompt's passage numbering.
 A reply that parses but cites nothing (or only passages that were dropped
 from the prompt) is an ungrounded answer and is reported as a no-match.
 A reply that violates the JSON contract (including a non-boolean
 sufficient_context) degrades to a conservative fallback — the raw text with
-all provided passages — rather than failing the request.
+the passages shown to the model — rather than failing the request.
 """
 
 import json
@@ -44,8 +46,17 @@ Reply with ONLY a JSON object:
 {"answer": str, "cited_passages": [int], "sufficient_context": bool}"""
 
 
+# "[2]", "[1, 3]", "[1; 3]" — one or two digits only, so a bracketed year
+# such as "[2023]" is never mistaken for a citation
+_CITATION = re.compile(r"\s?\[(\d{1,2}(?:\s*[,;]\s*\d{1,2})*)\]")
+
+
 class LLMError(RuntimeError):
     """Raised when the LLM provider fails; callers must not fabricate answers."""
+
+
+class LLMNotConfiguredError(LLMError):
+    """Raised when an answer needs the LLM but no provider credentials are set."""
 
 
 @runtime_checkable
@@ -94,18 +105,60 @@ class AnswerGenerator:
         user_prompt = self._build_user_prompt(passages, question)
         try:
             raw = self._llm.complete(_SYSTEM_PROMPT, user_prompt)
+        except LLMError:
+            raise
         except Exception as exc:
             raise LLMError(f"LLM provider failed: {exc}") from exc
 
         parsed = self._parse_reply(raw)
         if parsed is None:
-            logger.warning("LLM reply violated the JSON contract; falling back to all passages")
-            return Answered(answer=raw.strip(), matched=True, sources=list(retrieval.sources))
-        cited = [number for number in parsed.cited_passages if number in shown]
+            # the shown passages are a prefix (1..k), so any [n] in the raw
+            # text already lines up with the returned sources
+            logger.warning("LLM reply violated the JSON contract; falling back to shown passages")
+            return Answered(
+                answer=raw.strip(),
+                matched=True,
+                sources=[retrieval.sources[number - 1] for number in shown],
+            )
+        cited = self._citation_order(parsed, shown)
         if not parsed.sufficient_context or not cited:
             return Answered(answer=parsed.answer, matched=False, sources=[])
         sources = [retrieval.sources[number - 1] for number in cited]
-        return Answered(answer=parsed.answer, matched=True, sources=sources)
+        return Answered(
+            answer=self._renumber_citations(parsed.answer, cited), matched=True, sources=sources
+        )
+
+    # -- citations --------------------------------------------------------------
+
+    @staticmethod
+    def _citation_order(parsed: _ParsedReply, shown: list[int]) -> list[int]:
+        """Passage numbers that ground the answer, in the order a reader meets
+        them: markers in the answer text first, then any passage listed in
+        `cited_passages` but never marked inline. Passages the model never saw
+        are ignored."""
+        in_text = [
+            int(number)
+            for match in _CITATION.finditer(parsed.answer)
+            for number in re.split(r"\s*[,;]\s*", match.group(1))
+        ]
+        ordered = dict.fromkeys(n for n in [*in_text, *parsed.cited_passages] if n in shown)
+        return list(ordered)
+
+    @staticmethod
+    def _renumber_citations(answer: str, cited: list[int]) -> str:
+        """Rewrite prompt passage numbers so `[n]` means `sources[n - 1]`.
+        Markers that point at no returned source are removed."""
+        new_number = {old: new for new, old in enumerate(cited, 1)}
+
+        def replace(match: re.Match) -> str:
+            numbers = [int(n) for n in re.split(r"\s*[,;]\s*", match.group(1))]
+            mapped = list(dict.fromkeys(new_number[n] for n in numbers if n in new_number))
+            if not mapped:
+                return ""
+            leading = match.group(0)[0] if match.group(0)[0].isspace() else ""
+            return f"{leading}[{', '.join(str(n) for n in mapped)}]"
+
+        return _CITATION.sub(replace, answer)
 
     # -- prompt building ------------------------------------------------------
 

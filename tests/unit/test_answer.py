@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from arxiv_rag.rag.answer import AnswerGenerator, ChatClient, LLMError
+from arxiv_rag.rag.answer import AnswerGenerator, ChatClient, LLMError, LLMNotConfiguredError
 from arxiv_rag.rag.llm import OpenAICompatibleChat
 from arxiv_rag.rag.retrieve import RetrievalResult, RetrievedPaper
 
@@ -93,7 +93,7 @@ def test_json_reply_yields_answer_with_only_cited_sources():
     llm = FakeLLM(reply_json("Paper 2 proposes X [2].", cited=[2]))
     result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
     assert result.matched is True
-    assert result.answer == "Paper 2 proposes X [2]."
+    assert result.answer == "Paper 2 proposes X [1]."  # renumbered: [1] is sources[0]
     assert [s.arxiv_id for s in result.sources] == ["2401.00002"]  # only the cited one
 
 
@@ -124,6 +124,60 @@ def test_plain_text_reply_falls_back_to_all_sources():
     assert result.matched is True
     assert result.answer == "A plain prose answer without JSON."
     assert len(result.sources) == 2  # conservative fallback: all provided passages
+
+
+# -- citation numbering matches the returned sources ---------------------------
+
+
+def test_citations_are_renumbered_in_order_of_first_appearance():
+    llm = FakeLLM(reply_json("Method A [3] beats B [1]; see also [3].", cited=[1, 3]))
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2), paper(3)), "q")
+    assert [s.arxiv_id for s in result.sources] == ["2401.00003", "2401.00001"]
+    assert result.answer == "Method A [1] beats B [2]; see also [1]."
+
+
+def test_grouped_citations_are_renumbered_together():
+    llm = FakeLLM(reply_json("Both agree [4, 2].", cited=[2, 4]))
+    result = AnswerGenerator(llm).answer(sources(*(paper(n) for n in range(1, 5))), "q")
+    assert [s.arxiv_id for s in result.sources] == ["2401.00004", "2401.00002"]
+    assert result.answer == "Both agree [1, 2]."
+
+
+def test_marker_for_a_passage_that_does_not_exist_is_removed():
+    llm = FakeLLM(reply_json("a [1] and mysteriously [7].", cited=[1, 7]))
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.answer == "a [1] and mysteriously."
+
+
+def test_cited_passage_without_inline_marker_is_appended_after_marked_ones():
+    llm = FakeLLM(reply_json("Mostly from [2].", cited=[1, 2]))
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert [s.arxiv_id for s in result.sources] == ["2401.00002", "2401.00001"]
+    assert result.answer == "Mostly from [1]."
+
+
+def test_inline_marker_missing_from_cited_list_still_counts_as_a_source():
+    llm = FakeLLM(reply_json("Shown in [2].", cited=[]))
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is True
+    assert [s.arxiv_id for s in result.sources] == ["2401.00002"]
+    assert result.answer == "Shown in [1]."
+
+
+def test_bracketed_years_are_not_treated_as_citations():
+    llm = FakeLLM(reply_json("Introduced in [2023] and extended [2].", cited=[2]))
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.answer == "Introduced in [2023] and extended [1]."
+
+
+def test_fallback_sources_exclude_passages_dropped_from_the_prompt():
+    long_abstract = "First sentence is long enough. " * 30
+    llm = FakeLLM("Plain prose citing [1].")
+    result = AnswerGenerator(llm, max_context_chars=1200).answer(
+        sources(paper(1, long_abstract), paper(2, long_abstract), paper(3, long_abstract)), "q"
+    )
+    assert result.matched is True
+    assert [s.arxiv_id for s in result.sources] == ["2401.00001"]  # only what the model saw
 
 
 # -- strict grounding contract ----------------------------------------------
@@ -196,6 +250,18 @@ def test_llm_failure_raises_instead_of_fabricating():
 
     with pytest.raises(LLMError, match="provider down"):
         AnswerGenerator(ExplodingLLM("x")).answer(sources(paper(1)), "q")
+
+
+def test_missing_llm_credentials_propagate_as_not_configured():
+    client = OpenAICompatibleChat(base_url="https://api.example/v1", api_key="", model="m")
+    with pytest.raises(LLMNotConfiguredError, match="LLM_API_KEY"):
+        AnswerGenerator(client).answer(sources(paper(1)), "q")
+
+
+def test_no_match_needs_no_llm_credentials():
+    client = OpenAICompatibleChat(base_url="https://api.example/v1", api_key="", model="m")
+    result = AnswerGenerator(client).answer(sources(), "q")
+    assert result.matched is False
 
 
 def test_chat_client_protocol_is_satisfied_by_minimal_fake():

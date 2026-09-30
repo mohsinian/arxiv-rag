@@ -6,8 +6,10 @@ from arxiv_rag.rag.evaluation import (
     EvalQuestion,
     EvalReport,
     QuestionResult,
+    gold_ids,
     hit_at_k,
     load_questions,
+    split_by_coverage,
 )
 
 pytestmark = pytest.mark.unit
@@ -160,3 +162,24 @@ def test_mrr_is_reciprocal_rank_of_first_hit():
         QuestionResult(question=EvalQuestion(question="q3", expected=["c"]), retrieved=["x", "y"]),
     ]
     assert EvalReport(results=results).mrr() == (1 / 1 + 1 / 2 + 0) / 3
+
+
+# -- gold coverage (reproducible eval on any dataset) ----------------------------
+
+
+def test_gold_ids_are_deduplicated_and_skip_unanswerable():
+    questions = [
+        EvalQuestion(question="q1", expected=["a", "b"]),
+        EvalQuestion(question="q2", expected=["b", "c"]),
+        EvalQuestion(question="q3", expected=["none"]),
+    ]
+    assert gold_ids(questions) == ["a", "b", "c"]
+
+
+def test_questions_without_any_indexed_gold_are_skipped():
+    covered = EvalQuestion(question="q1", expected=["a", "missing"])
+    uncovered = EvalQuestion(question="q2", expected=["missing"])
+    unanswerable = EvalQuestion(question="q3", expected=["none"])
+    scorable, skipped = split_by_coverage([covered, uncovered, unanswerable], indexed_ids={"a"})
+    assert scorable == [covered, unanswerable]  # one indexed gold is enough
+    assert skipped == [uncovered]

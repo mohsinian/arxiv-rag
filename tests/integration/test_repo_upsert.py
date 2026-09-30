@@ -188,3 +188,13 @@ def test_category_order_in_the_feed_does_not_trigger_an_update(pg_session):
     summary = repo.upsert_records([record(categories=("cs.CL", "cs.AI", "cs.LG"))])
 
     assert summary == IngestSummary(new=0, updated=0, unchanged=1)
+
+
+def test_existing_arxiv_ids_returns_only_stored_papers(pg_session):
+    repo = Repository(pg_session)
+    repo.upsert_records([record(arxiv_id="2401.00001"), record(arxiv_id="2401.00002")])
+
+    found = repo.existing_arxiv_ids(["2401.00001", "2401.00002", "2401.99999"])
+
+    assert found == {"2401.00001", "2401.00002"}
+    assert repo.existing_arxiv_ids([]) == set()

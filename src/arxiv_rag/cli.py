@@ -1,6 +1,5 @@
 """Command-line interface: ingest, wipe, reindex, eval."""
 
-import logging
 from pathlib import Path
 
 import typer
@@ -11,8 +10,9 @@ from arxiv_rag.config import get_settings
 from arxiv_rag.db.repo import Repository
 from arxiv_rag.ingest.client import ArxivClient
 from arxiv_rag.ingest.pipeline import IngestPipeline
+from arxiv_rag.logging_config import configure_logging
 from arxiv_rag.rag.embeddings import build_embedder
-from arxiv_rag.rag.evaluation import load_questions, run_eval
+from arxiv_rag.rag.evaluation import gold_ids, load_questions, run_eval, split_by_coverage
 from arxiv_rag.rag.indexer import EmbeddingIndexer
 from arxiv_rag.rag.retrieve import PaperRetriever
 
@@ -36,18 +36,39 @@ def ingest(
     limit: int = typer.Option(
         1000, "--limit", "-l", min=1, help="Maximum number of papers to fetch."
     ),
+    ids: str = typer.Option(
+        "", "--ids", help="Comma-separated arXiv ids to fetch instead of a category query."
+    ),
+    ids_from: Path | None = typer.Option(
+        None,
+        "--ids-from",
+        help="Fetch the gold papers of an eval question set (YAML) instead of a category query.",
+    ),
 ) -> None:
     """Fetch papers from the arXiv API and upsert them into the database.
 
+    By default fetches the newest `--limit` papers in any of `--categories`.
+    With `--ids` / `--ids-from`, fetches exactly those papers instead (e.g.
+    `--ids-from eval/retrieval_questions.yaml` makes `eval` reproducible).
     Safe to re-run: unchanged papers are skipped, changed ones are updated,
     and nothing is ever duplicated.
     """
-    parsed = [c.strip() for c in categories.split(",") if c.strip()]
     settings = get_settings()
+    try:
+        wanted = [i.strip() for i in ids.split(",") if i.strip()]
+        if ids_from is not None:
+            wanted += gold_ids(load_questions(ids_from))
+    except Exception as exc:
+        typer.echo(f"ingest failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     session = _open_session()
     try:
         pipeline = IngestPipeline(ArxivClient(settings), Repository(session))
-        summary = pipeline.run(parsed, limit, page_size=settings.arxiv_page_size)
+        if ids or ids_from is not None:
+            summary = pipeline.run_ids(wanted, page_size=settings.arxiv_page_size)
+        else:
+            parsed = [c.strip() for c in categories.split(",") if c.strip()]
+            summary = pipeline.run(parsed, limit, page_size=settings.arxiv_page_size)
     except Exception as exc:
         typer.echo(f"ingest failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -115,11 +136,12 @@ def eval(
     session = _open_session()
     try:
         questions = load_questions(Path(question_set))
+        repo = Repository(session)
+        indexed = repo.existing_arxiv_ids(gold_ids(questions))
+        scorable, skipped = split_by_coverage(questions, indexed)
         embedder = build_embedder(settings)
-        retriever = PaperRetriever(
-            Repository(session), embedder, top_k=top_k, min_score=settings.min_score
-        )
-        report = run_eval(questions, lambda q: [s.arxiv_id for s in retriever.retrieve(q).sources])
+        retriever = PaperRetriever(repo, embedder, top_k=top_k, min_score=settings.min_score)
+        report = run_eval(scorable, lambda q: [s.arxiv_id for s in retriever.retrieve(q).sources])
     except Exception as exc:
         typer.echo(f"eval failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -131,6 +153,13 @@ def eval(
         f"Retrieval setup: vector-only · {settings.embedding_model} · "
         f"top {top_k} · min_score {settings.min_score}"
     )
+    if skipped:
+        typer.echo(
+            f"Skipped {len(skipped)} question(s) whose gold papers are not in the dataset — "
+            f"run `arxiv-rag ingest --ids-from {question_set}` to score them:"
+        )
+        for question in skipped:
+            typer.echo(f"  - {question.question}  (gold: {', '.join(question.expected)})")
     typer.echo(f"Evaluated {len(report.results)} questions ({answerable} answerable):")
     for k in report.ks:
         typer.echo(f"  hit@{k}: {report.mean_hit_at(k):.1%}")
@@ -147,7 +176,7 @@ def eval(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    configure_logging(get_settings().log_level)
     app()
 
 

@@ -63,8 +63,17 @@ class ArxivClient:
         """
         if max_results is None:
             max_results = self._settings.arxiv_page_size
-        params = self._page_params(categories, start, max_results)
+        return self._get_records(self._page_params(categories, start, max_results))
 
+    def fetch_by_ids(self, arxiv_ids: list[str]) -> list[PaperRecord]:
+        """Fetch specific papers by arXiv id (latest version of each), in one
+        request with the same throttling and retries as `fetch_page`."""
+        cleaned = list(dict.fromkeys(i.strip() for i in arxiv_ids if i and i.strip()))
+        if not cleaned:
+            raise ValueError("at least one arXiv id is required")
+        return self._get_records({"id_list": ",".join(cleaned), "max_results": len(cleaned)})
+
+    def _get_records(self, params: dict[str, str | int]) -> list[PaperRecord]:
         extra_wait = 0.0
         for attempt in itertools.count():
             self._respect_rate_limit(extra_wait)
@@ -157,6 +166,20 @@ class ArxivClient:
             fetched += len(records)
             if len(records) < page_size:
                 return
+
+    def iter_papers_by_ids(self, arxiv_ids: list[str]) -> Iterator[PaperRecord]:
+        """Yield the given papers, one `id_list` request per page of ids.
+
+        Ids arXiv does not return (withdrawn, mistyped) are logged, not fatal.
+        """
+        ids = list(dict.fromkeys(i.strip() for i in arxiv_ids if i and i.strip()))
+        page_size = self._settings.arxiv_page_size
+        for offset in range(0, len(ids), page_size):
+            chunk = ids[offset : offset + page_size]
+            records = self.fetch_by_ids(chunk)
+            if missing := sorted(set(chunk) - {record.arxiv_id for record in records}):
+                logger.warning("arXiv returned no record for id(s): %s", ", ".join(missing))
+            yield from records
 
     def close(self) -> None:
         self._http.close()

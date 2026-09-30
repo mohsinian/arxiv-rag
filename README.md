@@ -36,7 +36,8 @@ curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
 ```
 
 Notes:
-- arXiv requests are throttled to one per 3 seconds; ingesting 1,000 papers takes ~6 minutes.
+- arXiv requests are throttled to one per 3 seconds; ingesting 1,000 papers took
+  under a minute in our runs (ten pages of 100). Reindexing them on CPU took ~20 minutes.
 - Re-ingestion refreshes new and changed papers returned by the selected arXiv query window
   (the newest `--limit` papers); it is idempotent (`N new, N updated, N unchanged`), but a
   changed older paper outside that window is not rediscovered — there is no update-date
@@ -96,37 +97,61 @@ Paper counts per publication month (computed in the database). `category` and `m
 ### `GET /api/v1/stats/summary`
 
 ```json
-{"papers": 100, "authors": 488, "categories": 18, "avg_authors_per_paper": 5.03}
+{"papers": 1031, "authors": 5072, "categories": 79, "avg_authors_per_paper": 5.39}
 ```
 
 ### `POST /api/v1/ask`
 
+A grounded, cited answer (real response; `[n]` in the answer refers to
+`sources[n - 1]`):
+
 ```bash
 curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
-     -d '{"question":"How do AI agents use memory to stay stable while learning new tasks?"}'
+     -d '{"question":"How can hallucination detection use the topology of a model internal context?"}'
 ```
 
 ```json
 {
-  "answer": "The passages don't directly answer this question. The closest is [1], which studies the stability-plasticity tradeoff in agent memory: ...",
+  "answer": "According to the retrieved passages, hallucination detection can analyze the topology of information-flow patterns in attention graphs: by computing Forman-Ricci curvature to identify structural patterns indicating information bottlenecks, and capturing semi-local and global information-flow characteristics of attention heads in a single pass. This distinguishes hallucinated from non-hallucinated responses because hallucinations are associated with impaired context sharing—over-reliance on self-attention, diffused context retrieval from earlier tokens, or information over-squashing, especially in the final transformer layer [1].",
   "matched": true,
   "sources": [
-    {"arxiv_id": "2609.30558", "title": "Probing Stability-Plasticity Tradeoffs in Agent Memory through Cognitive Experimental Paradigms", "score": 0.7677},
-    {"arxiv_id": "2609.29233", "title": "Post-Training Leaves Behavioral Shadows on Unrelated Decisions", "score": 0.6564}
+    {"arxiv_id": "2609.21096", "title": "Detecting Hallucination in LLMs: Tracing the Topological Signatures of Impaired Context Sharing", "score": 0.8307}
   ]
 }
 ```
 
+And an honest no-match — nothing clears `MIN_SCORE`, so the LLM is never
+called and the response is instant:
+
+```bash
+curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
+     -d '{"question":"What is the best sourdough bread recipe?"}'
+```
+
+```json
+{
+  "answer": "I could not find relevant papers in the ingested dataset for that question, so I would rather not guess. Try rephrasing, or ingest more papers on the topic.",
+  "matched": false,
+  "sources": []
+}
+```
+
+> The examples above were generated with `z-ai/glm-5.3-flash` via xkiro
+> (`LLM_BASE_URL=https://api.xkiro.com/v1`). The default configuration is
+> `gpt-4o-mini` against `api.openai.com` — any OpenAI-compatible endpoint
+> works, and answer phrasing varies by model.
+
 The LLM must return a structured reply (`answer`, `cited_passages`,
 `sufficient_context`); citation numbers are validated in code against the
 passages actually shown to the model, and **only the passages the model
-actually cited become `sources`**. A parsed reply that cites nothing (or
+actually cited become `sources`** — markers are renumbered so `[n]` always
+means `sources[n - 1]`. A parsed reply that cites nothing (or
 reports `sufficient_context: false`) is returned as `matched: false` with no
 sources — an ungrounded answer is never dressed up as a cited one. The one
 exception: a reply that breaks the JSON contract entirely (plain text,
 truncated JSON, non-boolean `sufficient_context`) degrades to a conservative
-fallback — the raw text with all provided passages — because retrieval did
-match; this is logged as a warning. Prompts wrap passages as
+fallback — the raw text with the passages shown to the model — because
+retrieval did match; this is logged as a warning. Prompts wrap passages as
 untrusted XML with metadata (authors, date, category) and instruct the model
 that it sees a *sample* of the dataset — no corpus-level claims, no following
 instructions hidden in abstracts, partial answers allowed. When retrieval finds
@@ -159,31 +184,36 @@ paper_embeddings(paper_id, VECTOR(768), model, embedded_at)   -- RAG index, sepa
 - **Batch A** (19, assistant-authored): paraphrased from sampled papers, deliberately avoiding title wording; 1 unanswerable probe.
 - **Batch B** (11, **independently authored**): written via a local authoring UI by a human reader with no knowledge of the retrieval system; 3 unanswerable probes. Gold lists are post-adjudication — where the originally-mapped paper did not actually answer the question, or several papers genuinely answer it, `expected` lists the acceptable papers.
 
-`eval` runs retrieval only (no LLM), labels its setup, and reports hit@1/3/5, MRR, and no-match accuracy:
+`eval` runs retrieval only (no LLM), labels its setup, and reports hit@1/3/5, MRR, and no-match accuracy. Gold papers are fixed arXiv ids while `ingest` pulls the newest papers, so score the eval on a corpus that contains them:
 
 ```bash
+docker compose run --rm api arxiv-rag ingest --ids-from eval/retrieval_questions.yaml
+docker compose run --rm api arxiv-rag reindex
 docker compose run --rm api arxiv-rag eval
 # Retrieval setup: vector-only · Alibaba-NLP/gte-modernbert-base · top 10 · min_score 0.55
 # Evaluated 30 questions (26 answerable):
-#   hit@1: 73.1%   hit@3: 80.8%   hit@5: 84.6%
-#   MRR: 0.774
+#   hit@1: 84.6%   hit@3: 88.5%   hit@5: 92.3%
+#   MRR: 0.871
 #   no-match accuracy: 3/4 unanswerable questions rejected
 ```
 
-Per batch (3,000-paper index, vector-only, top 10):
+Questions whose gold papers are missing from the dataset are skipped and
+reported (never silently scored as misses).
+
+Per batch (1,031-paper index — newest 1,000 across `cs.AI`∪`cs.LG`∪`cs.CL`
+plus the eval golds; vector-only, top 10):
 
 | Batch | hit@1 | hit@3 | hit@5 | MRR | Notes |
 |---|---|---|---|---|---|
-| A — assistant-authored (18 answerable) | 83.3% | 88.9% | 88.9% | 0.861 | author knew the retrieval design |
-| B — independent, **strict** user golds (8 answerable) | 0% | 0% | 0% | 0.079 | hits: 3/8 within top 10 |
-| B — independent, **post-adjudication** golds | 50.0% | 75.0% | 75.0% | 0.579 | 7/8 within top 10 |
-| Combined (26 answerable) | 73.1% | 80.8% | 84.6% | 0.774 | reported by `eval` |
+| A — assistant-authored (18 answerable) | 94.4% | 94.4% | 94.4% | 0.951 | author knew the retrieval design |
+| B — independent, post-adjudication golds (8 answerable) | 62.5% | 75.0% | 87.5% | 0.692 | 7/8 within top 5 |
+| Combined (26 answerable) | 84.6% | 88.5% | 92.3% | 0.871 | reported by `eval` |
 
 How to read this honestly:
 
-- **Independent questions are much harder** than assistant-authored ones (3/8 vs 15/18 on strict golds). Manual adjudication of the 5 misses found only 1 genuine retrieval failure; 3 were mapping errors (the question's paper didn't actually answer it, while retrieval's top results did), and 1 had several valid papers with the gold outside the top 10. Authoring bias cuts both ways — an eval needs independent *questions* *and* validated *golds*.
-- The 1 remaining Batch-A recall miss plus the "type-safe LLM" miss are the query-rewriting gap: the gold papers sit below rank 10 even at top-30 (e.g. the post-training-recipe gold scores 0.72 against its question while related papers score 0.78+).
-- **No-match accuracy**: 3/4 unanswerable questions are correctly rejected at `MIN_SCORE=0.55`; one probe scored 0.58 and slips through — the threshold is a tunable compromise, and this metric exists to expose exactly that.
+- **Independent questions are harder** than assistant-authored ones (62.5% vs 94.4% at hit@1). During adjudication on the previous corpus, the strict pre-adjudication golds scored 0% at top 10 — manual review found most "misses" were mapping errors (the question's mapped paper didn't actually answer it), not retrieval failures. Authoring bias cuts both ways — an eval needs independent *questions* *and* validated *golds*.
+- The two remaining hit@5 misses are the query-rewriting gap: the post-training-recipe gold sits at rank 9 (0.72 against a 0.78 top match), and the "type-safe LLM" gold does not appear in the top 30 at all — the question's phrasing simply doesn't embed near its paper.
+- **No-match accuracy**: 3/4 unanswerable questions are correctly rejected at `MIN_SCORE=0.55`; the penalty-shootout probe scores 0.59 and slips through — the threshold is a tunable compromise, and this metric exists to expose exactly that.
 - This is a sanity harness, not a benchmark claim: 26 answerable questions means one question ≈ 4 points, and confidence intervals are wide.
 
 ## Environment variables

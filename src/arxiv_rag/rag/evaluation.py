@@ -1,8 +1,13 @@
 """Retrieval evaluation: hit@k over a hand-written question set.
 
-The question set is deliberately tiny (15-20 questions). It is a sanity
+The question set is deliberately small (about 30 questions). It is a sanity
 harness that catches retrieval regressions and compares embedding models —
 not a benchmark claim.
+
+Gold papers are fixed arXiv ids, while `ingest` pulls the newest papers, so
+a fresh dataset will usually not contain them. `ingest --ids-from <set>`
+fetches exactly the gold papers; questions whose golds are still missing are
+skipped (and reported) rather than silently scored as misses.
 """
 
 from dataclasses import dataclass
@@ -11,6 +16,7 @@ from pathlib import Path
 import yaml
 
 DEFAULT_KS = (1, 3, 5)
+UNANSWERABLE = "none"  # `expected: ["none"]` marks a question the dataset cannot answer
 
 
 def hit_at_k(retrieved: list[str], expected: list[str], k: int) -> bool:
@@ -23,6 +29,28 @@ class EvalQuestion:
     question: str
     expected: list[str]
 
+    @property
+    def is_unanswerable(self) -> bool:
+        return self.expected == [UNANSWERABLE]
+
+
+def gold_ids(questions: list[EvalQuestion]) -> list[str]:
+    """Every gold arXiv id in the set, first-seen order, without duplicates."""
+    return list(dict.fromkeys(i for q in questions if not q.is_unanswerable for i in q.expected))
+
+
+def split_by_coverage(
+    questions: list[EvalQuestion], indexed_ids: set[str]
+) -> tuple[list[EvalQuestion], list[EvalQuestion]]:
+    """(scorable, skipped): an answerable question is scorable only when at
+    least one of its gold papers is in the dataset. Unanswerable questions
+    are always scorable."""
+    scorable, skipped = [], []
+    for question in questions:
+        covered = question.is_unanswerable or bool(set(question.expected) & indexed_ids)
+        (scorable if covered else skipped).append(question)
+    return scorable, skipped
+
 
 @dataclass(frozen=True)
 class QuestionResult:
@@ -34,7 +62,7 @@ class QuestionResult:
 
     @property
     def is_unanswerable(self) -> bool:
-        return self.question.expected == ["none"]
+        return self.question.is_unanswerable
 
     def rank_of_first_hit(self) -> int | None:
         for index, arxiv_id in enumerate(self.retrieved, 1):

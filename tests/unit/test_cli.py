@@ -22,9 +22,14 @@ class FakePipeline:
         self.calls.append((list(categories), limit, page_size))
         return IngestSummary(new=limit)
 
+    def run_ids(self, arxiv_ids, page_size):
+        self.id_calls = [list(arxiv_ids)]
+        return IngestSummary(new=len(arxiv_ids))
+
 
 class FakeRepo:
     last: "FakeRepo | None" = None
+    indexed: set[str] | None = None  # None: every requested id is present
 
     def __init__(self, session):
         self.session = session
@@ -33,6 +38,9 @@ class FakeRepo:
 
     def wipe(self, embeddings_only=False):
         self.wipe_calls.append({"embeddings_only": embeddings_only})
+
+    def existing_arxiv_ids(self, arxiv_ids):
+        return set(arxiv_ids) if self.indexed is None else self.indexed & set(arxiv_ids)
 
 
 class FakeClient:
@@ -54,6 +62,7 @@ class FakeSession:
 def fakes(monkeypatch):
     FakePipeline.last = None
     FakeRepo.last = None
+    FakeRepo.indexed = None
     FakeClient.last = None
     monkeypatch.setattr(cli, "_open_session", FakeSession)
     monkeypatch.setattr(cli, "IngestPipeline", FakePipeline)
@@ -90,6 +99,36 @@ def test_ingest_failure_exits_nonzero(monkeypatch, fakes):
 
     assert result.exit_code == 1
     assert "network down" in result.output
+
+
+def test_ingest_ids_fetches_exactly_those_papers(fakes):
+    result = runner.invoke(cli.app, ["ingest", "--ids", "2401.00001, 2401.00002"])
+
+    assert result.exit_code == 0, result.output
+    assert FakePipeline.last.id_calls == [["2401.00001", "2401.00002"]]
+    assert FakePipeline.last.calls == []  # no category query
+    assert "2 new" in result.output
+
+
+def test_ingest_ids_from_fetches_eval_gold_papers(tmp_path, fakes):
+    question_set = tmp_path / "questions.yaml"
+    question_set.write_text(
+        "questions:\n"
+        "  - question: q1\n    expected: ['2401.00001', '2401.00002']\n"
+        "  - question: q2\n    expected: ['2401.00002']\n"
+        "  - question: sourdough?\n    expected: ['none']\n"
+    )
+    result = runner.invoke(cli.app, ["ingest", "--ids-from", str(question_set)])
+
+    assert result.exit_code == 0, result.output
+    assert FakePipeline.last.id_calls == [["2401.00001", "2401.00002"]]  # no "none", no dupes
+
+
+def test_ingest_ids_from_missing_file_exits_nonzero(fakes):
+    result = runner.invoke(cli.app, ["ingest", "--ids-from", "/nope/questions.yaml"])
+
+    assert result.exit_code == 1
+    assert "not found" in result.output
 
 
 def test_wipe_calls_repo_wipe(fakes):
@@ -200,3 +239,14 @@ def test_eval_with_missing_file_exits_nonzero(monkeypatch, eval_fakes):
 
     assert result.exit_code == 1
     assert "nope" in result.output
+
+
+def test_eval_skips_questions_whose_gold_papers_are_not_ingested(eval_fakes):
+    FakeRepo.indexed = {"a"}  # q2's gold paper "b" was never ingested
+    result = runner.invoke(cli.app, ["eval"])
+
+    assert result.exit_code == 0, result.output
+    assert "Skipped 1 question" in result.output
+    assert "ingest --ids-from" in result.output
+    assert "Evaluated 1 questions" in result.output
+    assert "hit@1: 100.0%" in result.output  # the skipped question is not a miss

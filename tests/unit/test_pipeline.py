@@ -37,6 +37,11 @@ class FakeClient:
         for page in self.pages:
             yield from page
 
+    def iter_papers_by_ids(self, arxiv_ids: list[str]) -> Iterator[PaperRecord]:
+        self.calls.append((list(arxiv_ids), len(arxiv_ids)))
+        for page in self.pages:
+            yield from page
+
     def explode_after_pages(self, pages_before_failure: int) -> None:
         original = self.iter_papers
 
@@ -109,3 +114,17 @@ def test_mid_ingest_failure_keeps_committed_pages():
 def test_no_results_returns_zero_summary():
     summary = IngestPipeline(FakeClient([]), FakeRepo()).run(["cs.AI"], limit=10)
     assert summary == IngestSummary()
+
+
+def test_run_ids_fetches_the_given_papers_and_commits_per_page():
+    client = FakeClient([[rec("2401.00001"), rec("2401.00002")], [rec("2401.00003")]])
+    repo = FakeRepo()
+
+    summary = IngestPipeline(client, repo).run_ids(
+        ["2401.00001", "2401.00002", "2401.00003"], page_size=2
+    )
+
+    assert client.calls == [(["2401.00001", "2401.00002", "2401.00003"], 3)]
+    assert [len(batch) for batch in repo.batches] == [2, 1]
+    assert repo.batches[0][0].title == "Title for 2401.00001"  # cleaned like any ingest
+    assert summary == IngestSummary(new=3)

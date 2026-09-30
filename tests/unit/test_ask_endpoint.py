@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from arxiv_rag.api.app import create_app
 from arxiv_rag.db.models import Base
-from arxiv_rag.rag.answer import Answered, LLMError
+from arxiv_rag.rag.answer import Answered, LLMError, LLMNotConfiguredError
 from arxiv_rag.rag.retrieve import RetrievedPaper
 
 pytestmark = pytest.mark.unit
@@ -89,3 +89,25 @@ def test_llm_failure_maps_to_502():
     response = make_app(LLMError("provider down: 401")).post("/api/v1/ask", json={"question": "q"})
     assert response.status_code == 502
     assert "provider" in response.json()["detail"].lower()
+
+
+def test_llm_failure_details_stay_in_the_server_log(caplog):
+    error = LLMError("provider down: Incorrect API key sk-live-abc123")
+    with caplog.at_level("ERROR", logger="arxiv_rag.api.routes.ask"):
+        response = make_app(error).post("/api/v1/ask", json={"question": "q"})
+    assert "sk-live-abc123" not in response.text
+    assert "sk-live-abc123" in caplog.text
+
+
+def test_missing_llm_credentials_map_to_503_with_a_clear_message():
+    error = LLMNotConfiguredError("no LLM credentials configured: set LLM_API_KEY")
+    response = make_app(error).post("/api/v1/ask", json={"question": "q"})
+    assert response.status_code == 503
+    assert "LLM_API_KEY" in response.json()["detail"]
+
+
+def test_answered_questions_are_logged_with_outcome(caplog):
+    answered = Answered(answer="X [1].", matched=True, sources=[SOURCE])
+    with caplog.at_level("INFO", logger="arxiv_rag.api.routes.ask"):
+        make_app(answered).post("/api/v1/ask", json={"question": "What is X?"})
+    assert "matched=True sources=1" in caplog.text

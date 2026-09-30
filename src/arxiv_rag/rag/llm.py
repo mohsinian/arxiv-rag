@@ -4,6 +4,8 @@ import logging
 
 from openai import OpenAI
 
+from arxiv_rag.rag.answer import LLMNotConfiguredError
+
 logger = logging.getLogger(__name__)
 
 
@@ -12,7 +14,9 @@ class OpenAICompatibleChat:
 
     The underlying client is created lazily on first use, so the app boots
     (health, stats, retrieval) without an LLM key configured; only /ask
-    needs one.
+    needs one, and a call without it raises `LLMNotConfiguredError` (503)
+    instead of surfacing the SDK's credential error as a provider failure.
+    Keyless local servers (e.g. Ollama) accept any placeholder key.
     """
 
     def __init__(
@@ -30,7 +34,16 @@ class OpenAICompatibleChat:
         self._timeout = timeout
         self._client: OpenAI | None = None
 
+    @property
+    def configured(self) -> bool:
+        return bool(self._api_key)
+
     def _get_client(self) -> OpenAI:
+        if not self.configured:
+            raise LLMNotConfiguredError(
+                "no LLM credentials configured: set LLM_API_KEY (plus LLM_BASE_URL and "
+                "LLM_MODEL for non-OpenAI providers) to enable answers"
+            )
         if self._client is None:
             self._client = OpenAI(
                 base_url=self._base_url, api_key=self._api_key, timeout=self._timeout

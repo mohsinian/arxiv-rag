@@ -26,7 +26,14 @@ class IngestPipeline:
         self._repo = repo
 
     def run(self, categories: list[str], limit: int, page_size: int = 100) -> IngestSummary:
-        records: Iterator[PaperRecord] = self._client.iter_papers(categories, limit=limit)
+        """Ingest the newest `limit` papers in any of `categories`."""
+        return self._ingest(self._client.iter_papers(categories, limit=limit), page_size)
+
+    def run_ids(self, arxiv_ids: list[str], page_size: int = 100) -> IngestSummary:
+        """Ingest specific papers by arXiv id (e.g. an eval set's gold papers)."""
+        return self._ingest(self._client.iter_papers_by_ids(arxiv_ids), page_size)
+
+    def _ingest(self, records: Iterator[PaperRecord], page_size: int) -> IngestSummary:
         total = IngestSummary()
         while True:
             batch = list(islice(records, page_size))

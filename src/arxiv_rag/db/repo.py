@@ -212,6 +212,16 @@ class Repository:
         """Run a similarity query with the query vector bound as a parameter."""
         return self._session.execute(stmt, {"query_vector": query_vector}).all()
 
+    def existing_arxiv_ids(self, arxiv_ids: Sequence[str]) -> set[str]:
+        """The subset of `arxiv_ids` present in the dataset."""
+        if not arxiv_ids:
+            return set()
+        return set(
+            self._session.execute(
+                select(models.Paper.arxiv_id).where(models.Paper.arxiv_id.in_(list(arxiv_ids)))
+            ).scalars()
+        )
+
     def papers_metadata(self, arxiv_ids: Sequence[str]) -> dict[str, dict]:
         """Display metadata for the given papers: published date, primary
         category, and up to three authors (then 'et al.'), author-ordered."""

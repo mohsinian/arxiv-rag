@@ -180,3 +180,45 @@ def test_iter_papers_rejects_non_positive_limit():
     client = make_client(lambda request: httpx.Response(200, text=make_feed()))
     with pytest.raises(ValueError, match="limit"):
         list(client.iter_papers(["cs.LG"], limit=0))
+
+
+# Fetching specific papers (id_list)
+
+
+def test_fetch_by_ids_uses_id_list_instead_of_a_search_query():
+    captured: list[httpx.Request] = []
+    client = make_client(queue_handler([make_feed("2401.00001", "2401.00002")], captured))
+    records = client.fetch_by_ids(["2401.00001", " 2401.00002 ", "2401.00001"])
+    assert [r.arxiv_id for r in records] == ["2401.00001", "2401.00002"]
+    params = captured[0].url.params
+    assert params["id_list"] == "2401.00001,2401.00002"  # stripped and deduplicated
+    assert params["max_results"] == "2"
+    assert "search_query" not in params
+
+
+def test_fetch_by_ids_rejects_an_empty_list():
+    client = make_client(lambda request: httpx.Response(200, text=make_feed()))
+    with pytest.raises(ValueError, match="id"):
+        client.fetch_by_ids(["", "  "])
+
+
+def test_iter_papers_by_ids_requests_one_page_of_ids_at_a_time():
+    captured: list[httpx.Request] = []
+    client = make_client(
+        queue_handler([make_feed("2401.00001", "2401.00002"), make_feed("2401.00003")], captured),
+        arxiv_page_size=2,
+    )
+    records = list(client.iter_papers_by_ids(["2401.00001", "2401.00002", "2401.00003"]))
+    assert [r.arxiv_id for r in records] == ["2401.00001", "2401.00002", "2401.00003"]
+    assert [r.url.params["id_list"] for r in captured] == [
+        "2401.00001,2401.00002",
+        "2401.00003",
+    ]
+
+
+def test_iter_papers_by_ids_logs_ids_arxiv_did_not_return(caplog):
+    client = make_client(queue_handler([make_feed("2401.00001")], []))
+    with caplog.at_level("WARNING", logger="arxiv_rag.ingest.client"):
+        records = list(client.iter_papers_by_ids(["2401.00001", "2401.99999"]))
+    assert [r.arxiv_id for r in records] == ["2401.00001"]
+    assert "2401.99999" in caplog.text

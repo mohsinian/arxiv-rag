@@ -38,8 +38,9 @@ curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
 Notes:
 - arXiv requests are throttled to one per 3 seconds; ingesting 1,000 papers takes ~6 minutes.
 - Re-running ingest is idempotent (`N new, N updated, N unchanged`); reindex only embeds
-  new/changed papers.
-- The first `reindex` downloads the embedding model (~600 MB) into the `hf-cache` volume.
+  new/changed papers (and re-embeds all papers after an embedding-model change).
+- The API loads the embedding model during startup; the first startup downloads it (~600 MB)
+  into the `hf-cache` volume, so `/health` may take a few minutes on a fresh volume.
 - The API image doubles as the CLI runner — everything happens inside Docker.
 
 ## API
@@ -219,7 +220,8 @@ answer, evaluation), `api/` (FastAPI app), `cli.py`; `migrations/` Alembic;
 6. **Author-name dedup** is exact-match; two different researchers sharing a name
    collapse into one row (no ORCID in the arXiv API).
 7. **No ANN index** (HNSW) on the embedding column — exact scan is fine at ≤5k
-   vectors; needed at scale.
+   vectors; needed at scale. If `EMBEDDING_MODEL` changes, run `reindex --rebuild`
+  (or regular `reindex`, which detects the stored model name) before serving queries.
 8. The eval set is intentionally small (sanity harness, not a benchmark;
    one question ≈ 4 points). Batch B is independently authored, but golds
    were adjudicated by the assistant — a fully blind labeling pass would

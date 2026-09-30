@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arxiv_rag}
       POSTGRES_DB: ${POSTGRES_DB:-arxiv_rag}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -26,11 +26,14 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-arxiv_rag}:${POSTGRES_PASSWORD:-arxiv_rag}@db:5432/${POSTGRES_DB:-arxiv_rag}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ARXIV_SLEEP_SECONDS: ${ARXIV_SLEEP_SECONDS:-3}
+      ARXIV_PAGE_SIZE: ${ARXIV_PAGE_SIZE:-100}
+      ARXIV_MAX_RETRIES: ${ARXIV_MAX_RETRIES:-3}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Alibaba-NLP/gte-modernbert-base}
       EMBED_DIM: ${EMBED_DIM:-768}
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-32}
       RAG_TOP_K: ${RAG_TOP_K:-5}
-      MIN_SCORE: ${MIN_SCORE:-0.25}
+      MIN_SCORE: ${MIN_SCORE:-0.55}
       MAX_CONTEXT_CHARS: ${MAX_CONTEXT_CHARS:-12000}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -40,6 +43,15 @@ services:
     command: sh -c "alembic upgrade head && uvicorn arxiv_rag.api.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      # first boot downloads the ~600 MB embedding model before uvicorn
+      # serves /health; stay in "starting" until that can finish
+      start_period: 300s
     depends_on:
       db:
         condition: service_healthy

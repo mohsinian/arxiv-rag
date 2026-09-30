@@ -126,7 +126,12 @@ class ArxivClient:
         if not cleaned:
             raise ValueError("at least one category is required, e.g. ['cs.AI']")
         return {
-            "search_query": " AND ".join(f"cat:{c}" for c in cleaned),
+            # Multiple requested categories mean a union: a paper matching any
+            # selected category belongs in the ingest set.  Using AND here
+            # accidentally restricted results to papers cross-listed in every
+            # category, which is both surprising and needlessly narrows the
+            # dataset.
+            "search_query": " OR ".join(f"cat:{c}" for c in cleaned),
             "start": start,
             "max_results": max_results,
             "sortBy": "submittedDate",

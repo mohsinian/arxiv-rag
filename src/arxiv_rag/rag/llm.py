@@ -15,16 +15,26 @@ class OpenAICompatibleChat:
     needs one.
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str, temperature: float = 0.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        temperature: float = 0.0,
+        timeout: float = 30.0,
+    ) -> None:
         self._base_url = base_url
         self._api_key = api_key
         self._model = model
         self._temperature = temperature
+        self._timeout = timeout
         self._client: OpenAI | None = None
 
     def _get_client(self) -> OpenAI:
         if self._client is None:
-            self._client = OpenAI(base_url=self._base_url, api_key=self._api_key)
+            self._client = OpenAI(
+                base_url=self._base_url, api_key=self._api_key, timeout=self._timeout
+            )
         return self._client
 
     def complete(self, system: str, user: str) -> str:

@@ -79,6 +79,22 @@ def test_reindex_is_a_noop_when_everything_is_fresh(seeded, pg_session):
     assert embedding_count(pg_session) == 3
 
 
+def test_model_change_reembeds_existing_papers(seeded, pg_session):
+    EmbeddingIndexer(seeded, FakeEmbedder(), expected_dim=768).reindex()
+
+    class NewModelEmbedder(FakeEmbedder):
+        model_name = "new-model"
+
+    embedder = NewModelEmbedder()
+    summary = EmbeddingIndexer(seeded, embedder, expected_dim=768).reindex()
+
+    assert summary.embedded == 3
+    assert len(embedder.calls) == 1
+    assert {row.model for row in pg_session.execute(select(models.PaperEmbedding)).scalars()} == {
+        "new-model"
+    }
+
+
 def test_changed_paper_is_re_embedded(seeded, pg_session):
     EmbeddingIndexer(seeded, FakeEmbedder(), expected_dim=768).reindex()
 

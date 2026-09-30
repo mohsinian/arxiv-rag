@@ -148,9 +148,10 @@ def test_chat_client_protocol_is_satisfied_by_minimal_fake():
     assert isinstance(FakeLLM("x"), ChatClient)
 
 
-def test_chat_client_defaults_to_temperature_zero():
+def test_chat_client_defaults_to_temperature_zero_and_timeout():
     client = OpenAICompatibleChat(base_url="https://api.example/v1", api_key="k", model="m")
     assert client._temperature == 0.0
+    assert client._timeout == 30.0
 
 
 # -- context budget ---------------------------------------------------------

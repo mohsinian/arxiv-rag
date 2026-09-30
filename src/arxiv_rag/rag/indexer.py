@@ -43,7 +43,7 @@ class EmbeddingIndexer:
             logger.info("embedding index cleared for rebuild")
 
         summary = ReindexSummary()
-        papers = self._repo.papers_needing_embedding()
+        papers = self._repo.papers_needing_embedding(self._embedder.model_name)
         while True:
             batch = list(islice(papers, 64))
             if not batch:

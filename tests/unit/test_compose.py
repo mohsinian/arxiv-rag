@@ -39,3 +39,17 @@ def test_compose_defines_api_service_built_from_repo():
 def test_api_service_waits_for_healthy_db():
     api = load_compose()["services"]["api"]
     assert api["depends_on"]["db"]["condition"] == "service_healthy"
+
+
+def test_compose_defaults_match_documented_rag_and_ingest_settings():
+    api = load_compose()["services"]["api"]
+    environment = api["environment"]
+    assert environment["MIN_SCORE"] == "${MIN_SCORE:-0.55}"
+    assert environment["ARXIV_SLEEP_SECONDS"] == "${ARXIV_SLEEP_SECONDS:-3}"
+    assert environment["ARXIV_PAGE_SIZE"] == "${ARXIV_PAGE_SIZE:-100}"
+    assert environment["ARXIV_MAX_RETRIES"] == "${ARXIV_MAX_RETRIES:-3}"
+
+
+def test_database_port_is_host_local_only():
+    db = load_compose()["services"]["db"]
+    assert db["ports"] == ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]

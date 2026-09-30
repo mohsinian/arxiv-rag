@@ -168,8 +168,13 @@ class Repository:
 
     # -- embeddings -----------------------------------------------------------
 
-    def papers_needing_embedding(self) -> Iterator[tuple[int, str, str]]:
-        """Papers with no embedding row, or whose text changed after embedding."""
+    def papers_needing_embedding(self, model_name: str) -> Iterator[tuple[int, str, str]]:
+        """Papers with no/stale embeddings for the active model.
+
+        A model switch must invalidate existing vectors even when the new model
+        has the same dimensionality; otherwise query vectors and stored paper
+        vectors come from incompatible spaces.
+        """
         rows = self._session.execute(
             select(models.Paper.id, models.Paper.title, models.Paper.abstract)
             .join(
@@ -181,6 +186,7 @@ class Repository:
                 or_(
                     models.PaperEmbedding.paper_id.is_(None),
                     models.Paper.updated_at > models.PaperEmbedding.embedded_at,
+                    models.PaperEmbedding.model != model_name,
                 )
             )
         ).all()

@@ -41,11 +41,11 @@ def test_builds_query_params_for_single_category():
     assert params["sortOrder"] == "descending"
 
 
-def test_builds_and_query_for_multiple_categories():
+def test_builds_or_query_for_multiple_categories():
     captured: list[httpx.Request] = []
     client = make_client(ok_handler(captured))
     client.fetch_page(["cs.AI", "cs.LG", "cs.CL"])
-    assert captured[0].url.params["search_query"] == "cat:cs.AI AND cat:cs.LG AND cat:cs.CL"
+    assert captured[0].url.params["search_query"] == "cat:cs.AI OR cat:cs.LG OR cat:cs.CL"
 
 
 def test_start_and_max_results_are_passed_through():

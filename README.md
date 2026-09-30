@@ -37,11 +37,16 @@ curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
 
 Notes:
 - arXiv requests are throttled to one per 3 seconds; ingesting 1,000 papers takes ~6 minutes.
-- Re-running ingest is idempotent (`N new, N updated, N unchanged`); reindex only embeds
-  new/changed papers (and re-embeds all papers after an embedding-model change).
+- Re-ingestion refreshes new and changed papers returned by the selected arXiv query window
+  (the newest `--limit` papers); it is idempotent (`N new, N updated, N unchanged`), but a
+  changed older paper outside that window is not rediscovered — there is no update-date
+  query or full-refresh mode yet. Reindex only embeds new/changed papers (and re-embeds
+  all papers after an embedding-model change).
 - The API loads the embedding model during startup; the first startup downloads it (~600 MB)
   into the `hf-cache` volume, so `/health` may take a few minutes on a fresh volume.
-- The API image doubles as the CLI runner — everything happens inside Docker.
+- The API image doubles as the CLI runner — everything happens inside Docker. Both the API
+  and every `docker compose run --rm api arxiv-rag …` invocation apply schema migrations
+  first (image entrypoint), so CLI commands work against a fresh database too.
 
 ## API
 
@@ -113,8 +118,15 @@ curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
 ```
 
 The LLM must return a structured reply (`answer`, `cited_passages`,
-`sufficient_context`); citation numbers are validated in code and **only the
-passages the model actually cited become `sources`**. Prompts wrap passages as
+`sufficient_context`); citation numbers are validated in code against the
+passages actually shown to the model, and **only the passages the model
+actually cited become `sources`**. A parsed reply that cites nothing (or
+reports `sufficient_context: false`) is returned as `matched: false` with no
+sources — an ungrounded answer is never dressed up as a cited one. The one
+exception: a reply that breaks the JSON contract entirely (plain text,
+truncated JSON, non-boolean `sufficient_context`) degrades to a conservative
+fallback — the raw text with all provided passages — because retrieval did
+match; this is logged as a warning. Prompts wrap passages as
 untrusted XML with metadata (authors, date, category) and instruct the model
 that it sees a *sample* of the dataset — no corpus-level claims, no following
 instructions hidden in abstracts, partial answers allowed. When retrieval finds
@@ -221,7 +233,7 @@ answer, evaluation), `api/` (FastAPI app), `cli.py`; `migrations/` Alembic;
    collapse into one row (no ORCID in the arXiv API).
 7. **No ANN index** (HNSW) on the embedding column — exact scan is fine at ≤5k
    vectors; needed at scale. If `EMBEDDING_MODEL` changes, run `reindex --rebuild`
-  (or regular `reindex`, which detects the stored model name) before serving queries.
+   (or regular `reindex`, which detects the stored model name) before serving queries.
 8. The eval set is intentionally small (sanity harness, not a benchmark;
    one question ≈ 4 points). Batch B is independently authored, but golds
    were adjudicated by the assistant — a fully blind labeling pass would
@@ -230,3 +242,14 @@ answer, evaluation), `api/` (FastAPI app), `cli.py`; `migrations/` Alembic;
 9. Citation validation is mechanical (every cited number must be a provided
    passage); whether cited passages actually entail each answer claim is not
    automatically checked.
+10. **Ingestion refreshes only the current query window** — the newest
+   `--limit` papers by submission date. A changed older paper outside that
+   window is never rediscovered; an update-date query (`sortBy=updatedDate`)
+   or full-refresh mode would close the gap.
+11. **The API eagerly loads the embedding model at startup** (fail-fast:
+   a broken model download stops the boot rather than surfacing at request
+   time). The tradeoff is that `/health` and the stats endpoints are coupled
+   to model availability and a fresh volume takes minutes before serving. A
+   lazy or background loader would decouple them — at the cost of a slow
+   first `/ask` and late discovery of a bad download, which is why the
+   eager load was kept for this deployment.

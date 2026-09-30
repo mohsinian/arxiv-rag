@@ -1,8 +1,10 @@
 import pytest
 
+from arxiv_rag.config import Settings
 from arxiv_rag.rag.embeddings import (
     EmbeddingConfigError,
     EmbeddingProvider,
+    build_embedder,
     check_embedding_dimension,
     passage_text,
 )
@@ -25,6 +27,12 @@ def test_dimension_mismatch_raises_with_actionable_message():
 
 def test_matching_dimension_passes():
     check_embedding_dimension(model_name="some/model", actual=768, expected=768)
+
+
+def test_build_embedder_rejects_dim_the_schema_cannot_store():
+    settings = Settings(embed_dim=1024)
+    with pytest.raises(EmbeddingConfigError, match=r"EMBED_DIM=1024.*migration"):
+        build_embedder(settings)
 
 
 def test_protocol_shape_is_satisfied_by_a_minimal_fake():

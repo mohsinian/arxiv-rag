@@ -1,9 +1,13 @@
 """Grounded answer generation: structured cited answers, honest no-match.
 
 The LLM must return JSON: {answer, cited_passages, sufficient_context}.
-Citation numbers are validated in code and only cited passages become the
-response's sources. A plain-text reply degrades to a conservative fallback
-(all provided passages) rather than failing the request.
+Citation numbers are validated in code against the passages actually shown
+to the model, and only cited passages become the response's sources.
+A reply that parses but cites nothing (or only passages that were dropped
+from the prompt) is an ungrounded answer and is reported as a no-match.
+A reply that violates the JSON contract (including a non-boolean
+sufficient_context) degrades to a conservative fallback — the raw text with
+all provided passages — rather than failing the request.
 """
 
 import json
@@ -86,7 +90,8 @@ class AnswerGenerator:
                 sources=[],
             )
 
-        user_prompt = self._build_user_prompt(retrieval, question)
+        passages, shown = self._fit_passages(retrieval.sources)
+        user_prompt = self._build_user_prompt(passages, question)
         try:
             raw = self._llm.complete(_SYSTEM_PROMPT, user_prompt)
         except Exception as exc:
@@ -94,24 +99,23 @@ class AnswerGenerator:
 
         parsed = self._parse_reply(raw)
         if parsed is None:
-            logger.warning("LLM reply was not valid JSON; falling back to all passages")
+            logger.warning("LLM reply violated the JSON contract; falling back to all passages")
             return Answered(answer=raw.strip(), matched=True, sources=list(retrieval.sources))
-        if not parsed.sufficient_context:
+        cited = [number for number in parsed.cited_passages if number in shown]
+        if not parsed.sufficient_context or not cited:
             return Answered(answer=parsed.answer, matched=False, sources=[])
-        valid = range(1, len(retrieval.sources) + 1)
-        cited = [number for number in parsed.cited_passages if number in valid]
-        sources = [retrieval.sources[number - 1] for number in cited] or list(retrieval.sources)
+        sources = [retrieval.sources[number - 1] for number in cited]
         return Answered(answer=parsed.answer, matched=True, sources=sources)
 
     # -- prompt building ------------------------------------------------------
 
-    def _build_user_prompt(self, retrieval: RetrievalResult, question: str) -> str:
-        passages = self._fit_passages(retrieval.sources)
+    def _build_user_prompt(self, passages: str, question: str) -> str:
         return f"<passages>\n{passages}\n</passages>\n\n<question>{escape(question)}</question>"
 
-    def _fit_passages(self, sources: list[RetrievedPaper]) -> str:
+    def _fit_passages(self, sources: list[RetrievedPaper]) -> tuple[str, list[int]]:
         """Render passages under the character budget: drop the lowest-ranked
-        first, then truncate the last survivor at a sentence boundary."""
+        first, then truncate the last survivor at a sentence boundary.
+        Returns the prompt text and the passage numbers actually shown."""
         blocks = {
             number: self._render_passage(number, paper) for number, paper in enumerate(sources, 1)
         }
@@ -125,7 +129,7 @@ class AnswerGenerator:
             blocks[number] = self._render_passage(
                 number, sources[number - 1], abstract=self._truncate_sentences(abstract, budget)
             )
-        return "\n".join(blocks[number] for number in kept)
+        return "\n".join(blocks[number] for number in kept), kept
 
     @staticmethod
     def _render_passage(number: int, paper: RetrievedPaper, abstract: str | None = None) -> str:
@@ -169,7 +173,11 @@ class AnswerGenerator:
             data = json.loads(text[start : end + 1])
             answer = str(data["answer"]).strip()
             cited = [int(number) for number in data.get("cited_passages", [])]
-            sufficient = bool(data.get("sufficient_context", True))
+            sufficient = data["sufficient_context"]
+            if not isinstance(sufficient, bool):
+                # "false"/"no"/"" are all truthy to bool() — a non-boolean
+                # value means the model broke the JSON contract
+                return None
             return _ParsedReply(answer=answer, cited_passages=cited, sufficient_context=sufficient)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None

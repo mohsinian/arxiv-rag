@@ -53,3 +53,19 @@ def test_compose_defaults_match_documented_rag_and_ingest_settings():
 def test_database_port_is_host_local_only():
     db = load_compose()["services"]["db"]
     assert db["ports"] == ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+
+
+def test_api_port_is_host_local_only():
+    # /ask is unauthenticated and spends the LLM key — no LAN exposure by default
+    api = load_compose()["services"]["api"]
+    assert api["ports"] == ["127.0.0.1:${API_PORT:-8000}:8000"]
+
+
+def test_image_entrypoint_migrates_schema_for_api_and_cli_runs():
+    # `docker compose run` overrides the service command, so migrations must
+    # live in the image ENTRYPOINT to also cover one-off CLI invocations
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+    entrypoint = (REPO_ROOT / "docker" / "entrypoint.sh").read_text()
+    assert 'ENTRYPOINT ["/app/entrypoint.sh"]' in dockerfile
+    assert "alembic upgrade head" in entrypoint
+    assert 'exec "$@"' in entrypoint

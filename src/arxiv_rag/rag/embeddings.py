@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from arxiv_rag.config import Settings
+from arxiv_rag.db.models import EMBEDDING_DIM
 
 
 class EmbeddingConfigError(Exception):
@@ -59,6 +60,14 @@ class SentenceTransformerEmbedder:
 
 
 def build_embedder(settings: Settings) -> SentenceTransformerEmbedder:
+    # The schema bakes the vector width into the column type (Vector(768)), so
+    # a different EMBED_DIM would pass the model check yet fail on every insert
+    if settings.embed_dim != EMBEDDING_DIM:
+        raise EmbeddingConfigError(
+            f"EMBED_DIM={settings.embed_dim} but the schema fixes the vector width at "
+            f"{EMBEDDING_DIM}; changing it requires a new migration plus reindex, "
+            "not just the environment variable"
+        )
     return SentenceTransformerEmbedder(
         settings.embedding_model,
         expected_dim=settings.embed_dim,

@@ -126,6 +126,60 @@ def test_plain_text_reply_falls_back_to_all_sources():
     assert len(result.sources) == 2  # conservative fallback: all provided passages
 
 
+# -- strict grounding contract ----------------------------------------------
+
+
+def test_sufficient_reply_with_no_citations_is_an_honest_no_match():
+    llm = FakeLLM(reply_json("Something vague.", cited=[]))
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is False
+    assert result.sources == []
+    assert result.answer == "Something vague."
+
+
+def test_string_sufficient_context_breaks_contract_and_falls_back():
+    # bool("false") is True — a non-boolean must not sneak through as sufficient
+    reply = json.dumps({"answer": "a [1]", "cited_passages": [1], "sufficient_context": "false"})
+    result = AnswerGenerator(FakeLLM(reply)).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is True  # retrieval matched; the reply itself was unparseable
+    assert len(result.sources) == 2  # conservative fallback: all provided passages
+
+
+def test_missing_sufficient_context_key_breaks_contract_and_falls_back():
+    reply = json.dumps({"answer": "a [1]", "cited_passages": [1]})
+    result = AnswerGenerator(FakeLLM(reply)).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is True
+    assert len(result.sources) == 2
+
+
+def test_truncated_json_falls_back_to_all_sources():
+    result = AnswerGenerator(FakeLLM('{"answer": "partial", "cited_passages": [1')).answer(
+        sources(paper(1), paper(2)), "q"
+    )
+    assert result.matched is True
+    assert len(result.sources) == 2
+
+
+def test_citation_to_passage_dropped_from_context_is_ignored():
+    long_abstract = "First sentence is long enough. " * 30
+    llm = FakeLLM(reply_json("a [1] [3].", cited=[1, 3]))
+    result = AnswerGenerator(llm, max_context_chars=1200).answer(
+        sources(paper(1, long_abstract), paper(2, long_abstract), paper(3, long_abstract)), "q"
+    )
+    assert result.matched is True
+    assert [s.arxiv_id for s in result.sources] == ["2401.00001"]  # passage 3 was never shown
+
+
+def test_citations_only_to_dropped_passages_is_an_honest_no_match():
+    long_abstract = "First sentence is long enough. " * 30
+    llm = FakeLLM(reply_json("a [3].", cited=[3]))
+    result = AnswerGenerator(llm, max_context_chars=1200).answer(
+        sources(paper(1, long_abstract), paper(2, long_abstract), paper(3, long_abstract)), "q"
+    )
+    assert result.matched is False
+    assert result.sources == []
+
+
 def test_no_retrieval_match_never_calls_the_llm():
     llm = FakeLLM("should not be called")
     result = AnswerGenerator(llm).answer(sources(), "anything")

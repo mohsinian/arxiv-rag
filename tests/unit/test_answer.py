@@ -296,3 +296,27 @@ def test_truncation_cuts_at_sentence_boundary():
     _system, user = llm.prompts[0]
     assert "key claim." in user
     assert "extra detail" not in user
+
+
+def test_insufficient_reply_with_citations_keeps_sources_but_unmatched():
+    llm = FakeLLM(reply_json("Partial: it covers X [2] but not Y.", cited=[2], sufficient=False))
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is False
+    assert result.answer == "Partial: it covers X [1] but not Y."  # marker still resolves
+    assert [s.arxiv_id for s in result.sources] == ["2401.00002"]
+
+
+def test_insufficient_reply_without_citations_strips_dangling_markers():
+    llm = FakeLLM(reply_json("They do not cover it.", cited=[], sufficient=False))
+    result = AnswerGenerator(llm).answer(sources(paper(1)), "q")
+    assert result.matched is False
+    assert result.sources == []
+    assert "[" not in result.answer
+
+
+def test_sufficient_but_uncited_strips_dangling_markers():
+    llm = FakeLLM(reply_json("Vague claims [7].", cited=[7]))  # 7 was never shown
+    result = AnswerGenerator(llm).answer(sources(paper(1), paper(2)), "q")
+    assert result.matched is False
+    assert result.sources == []
+    assert result.answer == "Vague claims."

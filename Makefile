@@ -1,7 +1,10 @@
 -include .env
 export DATABASE_URL
 
-.PHONY: help up-db up down logs psql test test-integration lint format ui db-shell smoke
+.PHONY: help up-db up down logs psql test test-integration lint format ui db-shell smoke ask ask-cli ingest reindex
+
+CATEGORIES ?= cs.AI,cs.LG,cs.CL
+LIMIT ?= 1000
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -14,6 +17,21 @@ up: ## Build and start the full stack (db + api)
 
 down: ## Stop the stack (data volume is kept)
 	docker compose down
+
+ingest: ## Fetch newest papers (CATEGORIES=cs.AI,cs.LG,cs.CL LIMIT=1000)
+	docker compose run --rm api arxiv-rag ingest --categories $(CATEGORIES) --limit $(LIMIT)
+
+reindex: ## Embed all new/changed papers (CPU: ~20 min per 1,000)
+	docker compose run --rm api arxiv-rag reindex
+
+ask: ## Ask the RUNNING api (warm model, no reload), e.g. make ask QUESTION="What is X?"
+	@test -n "$(QUESTION)" || (echo 'Usage: make ask QUESTION="your question"' && exit 2)
+	@docker compose exec -T api arxiv-rag ask --api "$(QUESTION)" || \
+		(echo 'API not reachable — run `make up` first, or use `make ask-cli` for the standalone path' && exit 2)
+
+ask-cli: ## Ask via a one-off container (loads the model; nothing else needs to run)
+	@test -n "$(QUESTION)" || (echo 'Usage: make ask-cli QUESTION="your question"' && exit 2)
+	docker compose run --rm api arxiv-rag ask "$(QUESTION)"
 
 smoke: ## Verify the composed API is serving
 	curl -fsS http://localhost:$${API_PORT:-8000}/health && echo

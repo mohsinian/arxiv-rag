@@ -250,3 +250,169 @@ def test_eval_skips_questions_whose_gold_papers_are_not_ingested(eval_fakes):
     assert "ingest --ids-from" in result.output
     assert "Evaluated 1 questions" in result.output
     assert "hit@1: 100.0%" in result.output  # the skipped question is not a miss
+
+
+# -- ask ------------------------------------------------------------------------
+
+
+def _fake_ask(answered=None, error=None):
+    """Patch cli.build_ask_handler/build_embedder; capture the question asked."""
+    asked: list[str] = []
+
+    def build_handler(settings, embedder):
+        def factory(repo):
+            def handler(question):
+                asked.append(question)
+                if error is not None:
+                    raise error
+                return answered
+
+            return handler
+
+        return factory
+
+    return build_handler, asked
+
+
+def test_ask_prints_answer_with_numbered_sources(monkeypatch, fakes):
+    from arxiv_rag.rag.answer import Answered
+    from arxiv_rag.rag.retrieve import RetrievedPaper
+
+    build_handler, asked = _fake_ask(
+        answered=Answered(
+            answer="X is proposed [1].",
+            matched=True,
+            sources=[
+                RetrievedPaper(arxiv_id="2401.00001", title="Paper One", abstract="a", score=0.81)
+            ],
+        )
+    )
+    monkeypatch.setattr(cli, "build_ask_handler", build_handler)
+    monkeypatch.setattr(cli, "build_embedder", lambda settings: object())
+
+    result = runner.invoke(cli.app, ["ask", "What is X?"])
+
+    assert result.exit_code == 0, result.output
+    assert asked == ["What is X?"]
+    assert "X is proposed [1]." in result.output
+    assert "[1] 2401.00001  Paper One  (0.81)" in result.output
+
+
+def test_ask_without_matches_prints_the_honest_no_match(monkeypatch, fakes):
+    from arxiv_rag.rag.answer import Answered
+
+    build_handler, _ = _fake_ask(
+        answered=Answered(answer="I could not find relevant papers.", matched=False, sources=[])
+    )
+    monkeypatch.setattr(cli, "build_ask_handler", build_handler)
+    monkeypatch.setattr(cli, "build_embedder", lambda settings: object())
+
+    result = runner.invoke(cli.app, ["ask", "sourdough?"])
+
+    assert result.exit_code == 0, result.output
+    assert "could not find relevant papers" in result.output
+    assert "Sources:" not in result.output
+
+
+def test_ask_llm_failure_exits_nonzero(monkeypatch, fakes):
+    from arxiv_rag.rag.answer import LLMError
+
+    build_handler, _ = _fake_ask(error=LLMError("provider down"))
+    monkeypatch.setattr(cli, "build_ask_handler", build_handler)
+    monkeypatch.setattr(cli, "build_embedder", lambda settings: object())
+
+    result = runner.invoke(cli.app, ["ask", "anything"])
+
+    assert result.exit_code == 1
+    assert "ask failed" in result.output
+
+
+def test_ask_flags_partial_answers_with_a_notice(monkeypatch, fakes):
+    from arxiv_rag.rag.answer import Answered
+    from arxiv_rag.rag.retrieve import RetrievedPaper
+
+    build_handler, _ = _fake_ask(
+        answered=Answered(
+            answer="Partial: X [1].",
+            matched=False,
+            sources=[
+                RetrievedPaper(
+                    arxiv_id="2401.00001",
+                    title="A Very Long Paper Title " * 5,
+                    abstract="a",
+                    score=0.71,
+                )
+            ],
+        )
+    )
+    monkeypatch.setattr(cli, "build_ask_handler", build_handler)
+    monkeypatch.setattr(cli, "build_embedder", lambda settings: object())
+
+    result = runner.invoke(cli.app, ["ask", "q"])
+
+    assert result.exit_code == 0, result.output
+    assert "partial answer" in result.output
+    assert "…" in result.output  # long title is truncated
+
+
+def test_ask_prints_enumerated_findings_as_separate_paragraphs(monkeypatch, fakes):
+    from arxiv_rag.rag.answer import Answered
+    from arxiv_rag.rag.retrieve import RetrievedPaper
+
+    answer = (
+        "Several approaches exist. (1) Fine-tune with solver feedback [1]. "
+        "(2) Route queries to the best model [2]."
+    )
+    build_handler, _ = _fake_ask(
+        answered=Answered(
+            answer=answer,
+            matched=True,
+            sources=[
+                RetrievedPaper(arxiv_id="2401.00001", title="One", abstract="a", score=0.8),
+                RetrievedPaper(arxiv_id="2401.00002", title="Two", abstract="a", score=0.7),
+            ],
+        )
+    )
+    monkeypatch.setattr(cli, "build_ask_handler", build_handler)
+    monkeypatch.setattr(cli, "build_embedder", lambda settings: object())
+
+    result = runner.invoke(cli.app, ["ask", "q"])
+
+    lines = result.output.splitlines()
+    assert "Several approaches exist." in lines[0]
+    assert any(line.startswith("(1) Fine-tune") for line in lines)
+    assert any(line.startswith("(2) Route queries") for line in lines)
+    assert result.exit_code == 0
+
+
+def test_ask_api_mode_renders_the_api_response(monkeypatch, fakes):
+    monkeypatch.setattr(
+        cli,
+        "_ask_via_api",
+        lambda question: {
+            "answer": "Answer from the API [1].",
+            "matched": True,
+            "sources": [
+                {"arxiv_id": "2401.00003", "title": "Three", "score": 0.66},
+            ],
+        },
+    )
+
+    result = runner.invoke(cli.app, ["ask", "--api", "q"])
+
+    assert result.exit_code == 0, result.output
+    assert "Answer from the API [1]." in result.output
+    assert "[1] 2401.00003  Three  (0.66)" in result.output
+
+
+def test_ask_api_mode_fails_with_a_hint_when_the_api_is_down(monkeypatch, fakes):
+    def unreachable(question):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(cli, "_ask_via_api", unreachable)
+
+    result = runner.invoke(cli.app, ["ask", "--api", "q"])
+
+    assert result.exit_code == 1
+    assert "could not reach the API" in result.output
+    assert "drop --api" in result.output

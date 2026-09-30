@@ -42,10 +42,13 @@ class SentenceTransformerEmbedder:
     def __init__(self, model_name: str, expected_dim: int, batch_size: int = 32) -> None:
         from sentence_transformers import SentenceTransformer
 
+        from arxiv_rag.logging_config import enforce_quiet_loggers
+
         self.model_name = model_name
         self._batch_size = batch_size
         self._model = SentenceTransformer(model_name, device="cpu")
-        dimension = int(self._model.get_sentence_embedding_dimension())
+        enforce_quiet_loggers()  # the load reconfigures hf/sentence-transformers logging
+        dimension = int(self._model.get_embedding_dimension())
         check_embedding_dimension(model_name, dimension, expected_dim)
         self.dimension = dimension
 

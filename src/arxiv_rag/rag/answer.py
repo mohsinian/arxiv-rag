@@ -6,10 +6,13 @@ to the model, and only cited passages become the response's sources. The
 `[n]` markers in the answer are renumbered to match: `[n]` always refers to
 `sources[n - 1]` in the response, never to the prompt's passage numbering.
 A reply that parses but cites nothing (or only passages that were dropped
-from the prompt) is an ungrounded answer and is reported as a no-match.
-A reply that violates the JSON contract (including a non-boolean
-sufficient_context) degrades to a conservative fallback — the raw text with
-the passages shown to the model — rather than failing the request.
+from the prompt) is an ungrounded answer and is reported as a no-match with
+its markers stripped. A reply that reports insufficient context keeps its
+answer and cited sources (so `[n]` still resolves) but is flagged
+`matched=false` for the incompleteness. A reply that violates the JSON
+contract (including a non-boolean sufficient_context) degrades to a
+conservative fallback — the raw text with the passages shown to the
+model — rather than failing the request.
 """
 
 import json
@@ -121,9 +124,20 @@ class AnswerGenerator:
                 sources=[retrieval.sources[number - 1] for number in shown],
             )
         cited = self._citation_order(parsed, shown)
-        if not parsed.sufficient_context or not cited:
-            return Answered(answer=parsed.answer, matched=False, sources=[])
         sources = [retrieval.sources[number - 1] for number in cited]
+        if not parsed.sufficient_context:
+            # partial answer: the cited passages still ground what was said
+            # (markers must resolve), but matched=false signals the gap
+            return Answered(
+                answer=self._renumber_citations(parsed.answer, cited),
+                matched=False,
+                sources=sources,
+            )
+        if not cited:
+            # sufficient but uncited: ungrounded — no sources, no dangling markers
+            return Answered(
+                answer=self._renumber_citations(parsed.answer, []), matched=False, sources=[]
+            )
         return Answered(
             answer=self._renumber_citations(parsed.answer, cited), matched=True, sources=sources
         )

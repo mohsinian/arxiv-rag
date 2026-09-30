@@ -20,20 +20,22 @@ arXiv API ──► ingest (parse → clean → upsert) ──► PostgreSQL + p
 Requires only Docker and a `.env`. No host Python.
 
 ```bash
-cp .env.example .env            # then set LLM_API_KEY (any OpenAI-compatible provider)
-docker compose up -d --build    # db (Postgres 16 + pgvector) + api (migrates on boot)
-curl http://localhost:8000/health
-# {"status":"ok","db":"ok"}
+cp .env.example .env   # then set LLM_API_KEY (any OpenAI-compatible provider)
+make up                # build + start db (Postgres 16 + pgvector) and the api
+make smoke             # → {"status":"ok","db":"ok"}
 ```
 
 Then ingest, index, and ask:
 
 ```bash
-docker compose run --rm api arxiv-rag ingest --categories cs.AI,cs.LG,cs.CL --limit 1000
-docker compose run --rm api arxiv-rag reindex
-curl -X POST localhost:8000/api/v1/ask -H 'Content-Type: application/json' \
-     -d '{"question":"What is CARGO?"}'
+make ingest            # newest 1,000 papers across cs.AI ∪ cs.LG ∪ cs.CL (~1 min)
+make reindex           # embed them (CPU, ~20 min; only new/changed papers after that)
+make ask QUESTION="What is CARGO?"
 ```
+
+Every target wraps the raw `docker compose` / CLI command — `make help` lists
+them all, and the [CLI section](#cli-arxiv-rag) shows the underlying commands
+(without make) if you prefer to type them longhand.
 
 Notes:
 - arXiv requests are throttled to one per 3 seconds; ingesting 1,000 papers took
@@ -145,8 +147,9 @@ The LLM must return a structured reply (`answer`, `cited_passages`,
 `sufficient_context`); citation numbers are validated in code against the
 passages actually shown to the model, and **only the passages the model
 actually cited become `sources`** — markers are renumbered so `[n]` always
-means `sources[n - 1]`. A parsed reply that cites nothing (or
-reports `sufficient_context: false`) is returned as `matched: false` with no
+means `sources[n - 1]`. A reply that reports `sufficient_context: false`
+keeps its answer and cited sources but returns `matched: false` (partial
+coverage); a reply that cites nothing valid is a full no-match with no
 sources — an ungrounded answer is never dressed up as a cited one. The one
 exception: a reply that breaks the JSON contract entirely (plain text,
 truncated JSON, non-boolean `sufficient_context`) degrades to a conservative
@@ -158,6 +161,47 @@ instructions hidden in abstracts, partial answers allowed. When retrieval finds
 nothing above `MIN_SCORE`, the LLM is never called: `matched` is `false`,
 `sources` is empty, and `answer` says so. Blank/oversized questions return 422;
 LLM provider failures return 502 — never a fabricated answer.
+
+## CLI (`arxiv-rag`)
+
+Every operation is also a CLI subcommand, run from the same image — each
+invocation applies schema migrations first, so no API server needs to be up:
+
+```bash
+docker compose run --rm api arxiv-rag <command>
+```
+
+| Command | What it does |
+|---|---|
+| `ingest --categories cs.AI,cs.LG,cs.CL --limit 1000` | fetch the newest papers in any of the categories |
+| `ingest --ids 2609.30558,…` or `--ids-from eval/retrieval_questions.yaml` | fetch specific papers by id (reproducible eval corpus) |
+| `reindex` (`--rebuild`) | embed new/changed papers; detects embedding-model switches |
+| `ask "question"` (`--api`) | full RAG answer in the terminal — `[n]` matches the printed source list; `--api` asks the running server (warm model, seconds) instead of loading one |
+| `eval` | retrieval-only eval: hit@1/3/5, MRR, no-match accuracy |
+| `wipe` (`--embeddings-only`) | drop the dataset (or just the embeddings) |
+
+`make ask` in action (asks the running API — real output, ~7 s end to end):
+
+```text
+$ make ask QUESTION="how can I get better performance out an LLM model?"
+The retrieved papers suggest several approaches:
+
+(1) use self-evolution carefully but guard against degeneration—ATRI reweights samples and
+halts training when learnable information gain stays low, since naive self-training can
+plateau or decline [1];
+
+(2) fine-tune with optimization-specific rewards, as in OptiScribe, where GRPO with
+solver-feedback rewards in a challenger-solver self-play setup substantially improved
+performance on generating hard MILP instances [2];
+
+Sources:
+  [1] 2609.36535  When Updating Stops Being Learning: Rethinking LLM Self-Evolution via…  (0.72)
+  [2] 2609.37356  Teaching LLMs to Generate Challenging MILP Instances via Solver Feedback  (0.73)
+```
+
+The Makefile wraps the common flows — `make up`, `make down`, `make smoke`,
+`make test`, `make ask QUESTION="…"` (warm API) and `make ask-cli QUESTION="…"`
+(standalone container) — run `make help` for the full list.
 
 ## Schema
 

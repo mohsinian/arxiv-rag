@@ -1,5 +1,9 @@
-"""Command-line interface: ingest, wipe, reindex, eval."""
+"""Command-line interface: ingest, wipe, reindex, eval, ask."""
 
+import json
+import re
+import textwrap
+import urllib.request
 from pathlib import Path
 
 import typer
@@ -11,6 +15,8 @@ from arxiv_rag.db.repo import Repository
 from arxiv_rag.ingest.client import ArxivClient
 from arxiv_rag.ingest.pipeline import IngestPipeline
 from arxiv_rag.logging_config import configure_logging
+from arxiv_rag.rag.answer import LLMError
+from arxiv_rag.rag.ask import build_ask_handler
 from arxiv_rag.rag.embeddings import build_embedder
 from arxiv_rag.rag.evaluation import gold_ids, load_questions, run_eval, split_by_coverage
 from arxiv_rag.rag.indexer import EmbeddingIndexer
@@ -173,6 +179,85 @@ def eval(
             typer.echo(
                 f"  - {miss.question.question}  (expected: {', '.join(miss.question.expected)})"
             )
+
+
+def _render_answer(answer: str, matched: bool, sources: list[tuple[str, str, float]]) -> None:
+    """Print an ask result readably: enumerated findings get their own
+    paragraph, everything wraps at 90 columns, and sources are numbered to
+    match the answer's [n] markers."""
+    items = [item for item in re.split(r"(?=\(\d{1,2}\)\s)", answer) if item.strip()]
+    if len(items) > 1:
+        typer.echo("\n\n".join(textwrap.fill(item.strip(), width=90) for item in items))
+    else:
+        typer.echo(textwrap.fill(answer.strip(), width=90))
+    if not matched and sources:
+        typer.echo("\n(partial answer: the retrieved papers do not fully cover the question)")
+    if sources:
+        typer.echo("\nSources:")
+        for number, (arxiv_id, title, score) in enumerate(sources, 1):
+            title = title if len(title) <= 72 else title[:69] + "…"
+            typer.echo(f"  [{number}] {arxiv_id}  {title}  ({score:.2f})")
+
+
+def _ask_via_api(question: str, base_url: str = "http://127.0.0.1:8000") -> dict:
+    """POST the question to the running API — reuses its warm embedding model."""
+    request = urllib.request.Request(
+        f"{base_url}/api/v1/ask",
+        data=json.dumps({"question": question}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help="The question to answer from the ingested papers."),
+    api: bool = typer.Option(
+        False, "--api", help="Ask the running API server instead of loading the model here."
+    ),
+) -> None:
+    """Answer a question with the full RAG pipeline.
+
+    By default loads the embedding model in this process (works standalone).
+    With --api, sends the question to the running API instead — the model
+    stays warm there, so answers come back in seconds with no load chatter.
+    Either way, `[n]` markers in the answer match the numbered source list
+    printed below it, exactly like the API response.
+    """
+    if api:
+        try:
+            result = _ask_via_api(question)
+        except Exception as exc:
+            typer.echo(
+                f"ask failed: could not reach the API ({exc}); run `docker compose up -d` "
+                "first or drop --api to load the model locally",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        _render_answer(
+            result["answer"],
+            result["matched"],
+            [(s["arxiv_id"], s["title"], s["score"]) for s in result["sources"]],
+        )
+        return
+
+    settings = get_settings()
+    session = _open_session()
+    try:
+        handler = build_ask_handler(settings, build_embedder(settings))(Repository(session))
+        answered = handler(question)
+    except LLMError as exc:
+        typer.echo(f"ask failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        session.close()
+    _render_answer(
+        answered.answer,
+        answered.matched,
+        [(s.arxiv_id, s.title, s.score) for s in answered.sources],
+    )
 
 
 def main() -> None:
